@@ -57,9 +57,28 @@
 
 ## Traceability
 
-| REQ-ID | Phase |
-|--------|-------|
-| BOT-01..11 | TBD |
-| VOICE-01..04 | TBD |
-| BRIEF-01..05 | TBD |
-| INFRA-01..03 | TBD |
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| INFRA-01 | Phase 1 | Pending |
+| INFRA-02 | Phase 1 | Pending |
+| BOT-01 | Phase 2 | Pending |
+| BOT-02 | Phase 2 | Pending |
+| BOT-03 | Phase 2 | Pending |
+| BOT-04 | Phase 2 | Pending |
+| BOT-05 | Phase 2 | Pending |
+| BOT-06 | Phase 2 | Pending |
+| BOT-07 | Phase 2 | Pending |
+| BOT-08 | Phase 2 | Pending |
+| BOT-09 | Phase 2 | Pending |
+| BOT-10 | Phase 2 | Pending |
+| BOT-11 | Phase 2 | Pending |
+| BRIEF-01 | Phase 3 | Pending |
+| BRIEF-02 | Phase 3 | Pending |
+| BRIEF-03 | Phase 3 | Pending |
+| BRIEF-04 | Phase 3 | Pending |
+| BRIEF-05 | Phase 3 | Pending |
+| VOICE-01 | Phase 4 | Pending |
+| VOICE-02 | Phase 4 | Pending |
+| VOICE-03 | Phase 4 | Pending |
+| VOICE-04 | Phase 4 | Pending |
+| INFRA-03 | Phase 5 | Pending |
