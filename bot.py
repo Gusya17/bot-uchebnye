@@ -4,7 +4,7 @@ import os
 import random
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -13,30 +13,36 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
+from order_states import SQLiteStorage
+from order_handlers import router as order_router
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=os.getenv("BOT_TOKEN"))
-dp = Dispatcher()
+dp = Dispatcher(storage=SQLiteStorage("fsm_storage.db"))
 
-# Заметки хранятся в памяти: {user_id: ["заметка1", "заметка2", ...]}
+# Подключаем роутер заявок до регистрации обработчиков dp,
+# чтобы FSM-фильтры в order_router имели приоритет над echo
+dp.include_router(order_router)
+
+# Заметки хранятся в памяти: {user_id: ["заметка1", ...]}
 notes: dict[int, list[str]] = {}
 
-# Цитаты про учёбу и знания
 QUOTES = [
     "«Образование — это то, что остаётся, когда всё выученное забыто.» — Б. Ф. Скиннер",
     "«Инвестиции в знания приносят наибольшие дивиденды.» — Бенджамин Франклин",
     "«Учиться никогда не поздно.» — Катон Старший",
     "«Единственный источник знания — это опыт.» — Альберт Эйнштейн",
     "«Образование — самое мощное оружие, которым вы можете изменить мир.» — Нельсон Мандела",
-    "«Чем больше я читаю, тем больше узнаю. Чем больше узнаю, тем больше забываю. Чем больше забываю, тем меньше знаю. Зачем тогда читать?» — студенческая мудрость",
+    "«Чем больше я читаю, тем больше узнаю. Чем больше узнаю, тем больше забываю. "
+    "Чем больше забываю, тем меньше знаю. Зачем тогда читать?» — студенческая мудрость",
 ]
 
-# Советы студентам
 TIPS = [
     "Делай перерыв 10 минут каждые 45–50 минут учёбы — мозг лучше усваивает информацию.",
     "Записывай дедлайны в один список сразу, как узнаёшь о них. Память не резиновая.",
-    "Объясни тему вслух, как будто учишь кого-то другого — пробелы в знаниях сразу станут видны.",
+    "Объясни тему вслух, как будто учишь кого-то другого — пробелы сразу станут видны.",
     "Не откладывай сложные задачи на ночь перед сдачей. Ночью мозг работает хуже, не быстрее.",
     "Читай условие задачи дважды, прежде чем начать. Половина ошибок — от невнимательного чтения.",
     "Задавай вопросы преподавателю. Спросить — не значит показать незнание, значит показать интерес.",
@@ -44,7 +50,7 @@ TIPS = [
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню — inline-кнопки под приветственным сообщением."""
+    """Главное меню бота."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💬 Цитата", callback_data="quote"),
@@ -55,10 +61,13 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="ℹ️ О боте", callback_data="about"),
             InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
         ],
+        [
+            InlineKeyboardButton(text="🎓 Заказать работу", callback_data="start_order"),
+        ],
     ])
 
 
-# ── /start ──────────────────────────────────────────────────────────────────
+# ── /start ───────────────────────────────────────────────────────────────────
 
 @dp.message(CommandStart())
 async def handle_start(message: Message):
@@ -74,6 +83,8 @@ async def handle_start(message: Message):
 HELP_TEXT = (
     "📋 <b>Список команд:</b>\n\n"
     "/start — главное меню\n"
+    "/order — оформить заявку на учебную работу\n"
+    "/cancel — прервать оформление заявки\n"
     "/help — этот список\n"
     "/about — о боте\n\n"
     "📝 <b>Заметки:</b>\n"
@@ -124,12 +135,10 @@ async def handle_tip(message: Message):
 
 @dp.message(Command("note"))
 async def handle_note(message: Message):
-    # Текст после команды: "/note купить кофе" → "купить кофе"
     text = message.text.removeprefix("/note").strip()
     if not text:
         await message.answer("Напиши текст заметки после команды.\nПример: /note купить учебник")
         return
-
     uid = message.from_user.id
     notes.setdefault(uid, []).append(text)
     idx = len(notes[uid])
@@ -142,11 +151,11 @@ async def handle_note(message: Message):
 async def handle_notes(message: Message):
     uid = message.from_user.id
     user_notes = notes.get(uid, [])
-
     if not user_notes:
-        await message.answer("У тебя пока нет заметок. Добавь первую: /note &lt;текст&gt;", parse_mode="HTML")
+        await message.answer(
+            "У тебя пока нет заметок. Добавь первую: /note &lt;текст&gt;", parse_mode="HTML"
+        )
         return
-
     lines = "\n".join(f"{i}. {n}" for i, n in enumerate(user_notes, 1))
     await message.answer(f"📝 <b>Твои заметки:</b>\n\n{lines}", parse_mode="HTML")
 
@@ -167,7 +176,7 @@ async def handle_clear(message: Message):
 
 @dp.callback_query(F.data == "quote")
 async def cb_quote(call: CallbackQuery):
-    await call.answer()  # убираем «часики» на кнопке
+    await call.answer()
     await call.message.answer(f"💬 {random.choice(QUOTES)}")
 
 
@@ -183,7 +192,9 @@ async def cb_notes(call: CallbackQuery):
     uid = call.from_user.id
     user_notes = notes.get(uid, [])
     if not user_notes:
-        await call.message.answer("У тебя пока нет заметок. Добавь: /note &lt;текст&gt;", parse_mode="HTML")
+        await call.message.answer(
+            "У тебя пока нет заметок. Добавь: /note &lt;текст&gt;", parse_mode="HTML"
+        )
     else:
         lines = "\n".join(f"{i}. {n}" for i, n in enumerate(user_notes, 1))
         await call.message.answer(f"📝 <b>Твои заметки:</b>\n\n{lines}", parse_mode="HTML")
@@ -201,9 +212,10 @@ async def cb_help(call: CallbackQuery):
     await call.message.answer(HELP_TEXT, parse_mode="HTML")
 
 
-# ── Эхо (все остальные текстовые сообщения) ──────────────────────────────────
+# ── Эхо — только когда нет активного FSM-состояния ───────────────────────────
+# StateFilter(None) не даёт echo перехватить сообщения внутри сценария заявки
 
-@dp.message(F.text)
+@dp.message(F.text, StateFilter(None))
 async def handle_echo(message: Message):
     await message.answer(message.text)
 
