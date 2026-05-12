@@ -9,7 +9,6 @@ import logging
 import re
 
 from aiogram import Router, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.types import (
     CallbackQuery,
@@ -148,6 +147,7 @@ def kb_diploma_type() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Бакалавр", callback_data="type_Диплом бакалавра")],
         [InlineKeyboardButton(text="Магистр",  callback_data="type_Диплом магистра")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="diploma_back")],
+        _BTN_CANCEL,
     ])
 
 
@@ -552,19 +552,31 @@ async def cb_dir_no(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "type_Диплом", StateFilter(OrderStates.choosing_type))
 async def cb_work_type_diploma(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
-    await call.message.edit_text(
-        "Шаг 1 из 13\n\nВыберите уровень диплома:",
-        reply_markup=kb_diploma_type(),
-    )
+    try:
+        await call.message.edit_text(
+            "Шаг 1 из 13\n\nВыберите уровень диплома:",
+            reply_markup=kb_diploma_type(),
+        )
+    except Exception:
+        await call.message.answer(
+            "Шаг 1 из 13\n\nВыберите уровень диплома:",
+            reply_markup=kb_diploma_type(),
+        )
 
 
 @router.callback_query(F.data == "diploma_back", StateFilter(OrderStates.choosing_type))
 async def cb_diploma_back(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
-    await call.message.edit_text(
-        "Шаг 1 из 13\n\nВыберите тип работы:",
-        reply_markup=kb_work_type(),
-    )
+    try:
+        await call.message.edit_text(
+            "Шаг 1 из 13\n\nВыберите тип работы:",
+            reply_markup=kb_work_type(),
+        )
+    except Exception:
+        await call.message.answer(
+            "Шаг 1 из 13\n\nВыберите тип работы:",
+            reply_markup=kb_work_type(),
+        )
 
 
 @router.callback_query(F.data.startswith("type_"), StateFilter(OrderStates.choosing_type))
@@ -1016,7 +1028,10 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
 
     tg_id = data.get("tg_id", call.from_user.id)
     tg_username = data.get("tg_username", "нет")
-    await save_order(tg_id, tg_username)
+    try:
+        await save_order(tg_id, tg_username)
+    except Exception:
+        log.exception("Не удалось сохранить заказ tg_id=%s", tg_id)
 
     await state.clear()
     await call.message.answer(
