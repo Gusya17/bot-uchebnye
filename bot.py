@@ -6,10 +6,13 @@ import random
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
 )
 from dotenv import load_dotenv
 
@@ -49,6 +52,17 @@ TIPS = [
 ]
 
 
+def reply_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянное меню внизу экрана — всегда видно."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🎓 Заказать работу")],
+            [KeyboardButton(text="⚡ Дополнить заказ")],
+        ],
+        resize_keyboard=True,
+    )
+
+
 def main_keyboard() -> InlineKeyboardMarkup:
     """Главное меню бота."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -63,8 +77,8 @@ def main_keyboard() -> InlineKeyboardMarkup:
 async def handle_start(message: Message):
     name = message.from_user.first_name
     await message.answer(
-        f"Привет, {name}! 👋\n\nЯ бот-помощник для учебных работ. Выбери действие:",
-        reply_markup=main_keyboard(),
+        f"Привет, {name}! 👋 Я помогу оформить заявку на учебную работу.",
+        reply_markup=reply_keyboard(),
     )
 
 
@@ -213,6 +227,15 @@ async def handle_echo(message: Message):
 # ── Запуск ────────────────────────────────────────────────────────────────────
 
 async def main():
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start",  description="Главное меню"),
+            BotCommand(command="order",  description="Оформить заявку"),
+            BotCommand(command="cancel", description="Прервать заявку"),
+            BotCommand(command="help",   description="Список команд"),
+        ])
+    except Exception:
+        pass  # Не критично — бот запустится без регистрации команд, aiogram сам переподключится
     await dp.start_polling(bot)
 
 
