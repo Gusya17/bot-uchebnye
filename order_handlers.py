@@ -1021,7 +1021,7 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await call.message.answer(
         "✅ <b>Заявка принята!</b>\n\n"
-        "Мы изучим ваши материалы и в течение 2 часов пришлём сообщение со стоимостью работы.\n\n"
+        "Обычно рассчитываем стоимость за 15–30 минут, максимум 2 часа (по МСК, 9:00–21:00).\n\n"
         "Если появятся уточнения — кнопка «⚡ Дополнить заказ» всегда под рукой.",
         parse_mode="HTML",
         reply_markup=kb_main_menu(),
