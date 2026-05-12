@@ -219,7 +219,9 @@ async def cb_help(call: CallbackQuery):
 # ── Эхо — только когда нет активного FSM-состояния ───────────────────────────
 # StateFilter(None) не даёт echo перехватить сообщения внутри сценария заявки
 
-@dp.message(F.text, StateFilter(None))
+_REPLY_BTNS = {"🎓 Заказать работу", "⚡ Дополнить заказ"}
+
+@dp.message(F.text & ~F.text.in_(_REPLY_BTNS), StateFilter(None))
 async def handle_echo(message: Message):
     await message.answer(message.text)
 

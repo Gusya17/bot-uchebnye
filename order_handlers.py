@@ -506,12 +506,12 @@ async def cb_go_back(call: CallbackQuery, state: FSMContext) -> None:
 # ─── Reply-кнопки постоянного меню ───────────────────────────────────────────
 # Зарегистрированы до текстовых обработчиков шагов, чтобы не перехватывались ими
 
-@router.message(F.text == "🎓 Заказать работу")
+@router.message(F.text == "🎓 Заказать работу", StateFilter(None))
 async def reply_start_order(message: Message, state: FSMContext) -> None:
     await _check_draft(message, state)
 
 
-@router.message(F.text == "⚡ Дополнить заказ")
+@router.message(F.text == "⚡ Дополнить заказ", StateFilter(None))
 async def reply_urgent_order(message: Message, state: FSMContext) -> None:
     tg_id = message.from_user.id
     try:
