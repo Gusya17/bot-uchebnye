@@ -95,7 +95,8 @@ class OrderStates(StatesGroup):
     checking_direction = State()       # 0.5: гуманитарная / физмат?
     choosing_type = State()            # 1:  тип работы
     entering_name = State()            # 2:  ФИО
-    entering_institution = State()     # 3:  учебное заведение
+    entering_institution = State()      # 3:  учебное заведение
+    confirming_institution = State()   # 3.5: подтверждение названия вуза
     entering_faculty = State()         # 4:  факультет
     entering_specialization = State()  # 5:  специализация
     choosing_course = State()          # 6:  курс

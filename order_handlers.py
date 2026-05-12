@@ -40,7 +40,8 @@ PREV_STATE: dict = {
     OrderStates.choosing_type.state:            OrderStates.checking_direction,
     OrderStates.entering_name.state:            OrderStates.choosing_type,
     OrderStates.entering_institution.state:     OrderStates.entering_name,
-    OrderStates.entering_faculty.state:         OrderStates.entering_institution,
+    OrderStates.confirming_institution.state:   OrderStates.entering_institution,
+    OrderStates.entering_faculty.state:         OrderStates.confirming_institution,
     OrderStates.entering_specialization.state:  OrderStates.entering_faculty,
     OrderStates.choosing_course.state:          OrderStates.entering_specialization,
     OrderStates.choosing_study_form.state:      OrderStates.choosing_course,
@@ -68,6 +69,7 @@ STATE_STEP: dict[str, str] = {
     OrderStates.choosing_type.state:            "1 из 13",
     OrderStates.entering_name.state:            "2 из 13",
     OrderStates.entering_institution.state:     "3 из 13",
+    OrderStates.confirming_institution.state:   "3 из 13",
     OrderStates.entering_faculty.state:         "4 из 13",
     OrderStates.entering_specialization.state:  "5 из 13",
     OrderStates.choosing_course.state:          "6 из 13",
@@ -152,6 +154,14 @@ def kb_study_form() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Очная",        callback_data="form_Очная")],
         [InlineKeyboardButton(text="Заочная",      callback_data="form_Заочная")],
         [InlineKeyboardButton(text="Очно-заочная", callback_data="form_Очно-заочная")],
+        _BTN_BACK, _BTN_CANCEL,
+    ])
+
+
+def kb_confirm_institution() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, верно",      callback_data="inst_ok")],
+        [InlineKeyboardButton(text="✏️ Ввести заново", callback_data="inst_retry")],
         _BTN_BACK, _BTN_CANCEL,
     ])
 
@@ -314,6 +324,12 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
             reply_markup=kb_back_cancel(),
+        )
+    elif current == OrderStates.confirming_institution.state:
+        institution = data.get("institution", "")
+        await message.answer(
+            f"Учебное заведение:\n\n«{institution}»\n\nВсё верно?",
+            reply_markup=kb_confirm_institution(),
         )
     elif current == OrderStates.entering_faculty.state:
         await message.answer(
@@ -537,11 +553,32 @@ async def msg_name(message: Message, state: FSMContext) -> None:
 
 @router.message(NON_COMMAND, StateFilter(OrderStates.entering_institution))
 async def msg_institution(message: Message, state: FSMContext) -> None:
-    await state.update_data(institution=message.text.strip())
-    await state.set_state(OrderStates.entering_faculty)
+    institution = message.text.strip()
+    await state.update_data(institution=institution)
+    await state.set_state(OrderStates.confirming_institution)
     await message.answer(
+        f"Учебное заведение:\n\n«{institution}»\n\nВсё верно?",
+        reply_markup=kb_confirm_institution(),
+    )
+
+
+@router.callback_query(F.data == "inst_ok", StateFilter(OrderStates.confirming_institution))
+async def cb_institution_ok(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.entering_faculty)
+    await call.message.answer(
         "Шаг 4 из 13\n\n🏫 Введите название факультета полностью:\n"
         "(без сокращений — как в документах учебного заведения)",
+        reply_markup=kb_back_cancel(),
+    )
+
+
+@router.callback_query(F.data == "inst_retry", StateFilter(OrderStates.confirming_institution))
+async def cb_institution_retry(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.entering_institution)
+    await call.message.answer(
+        "🏛 Введите название учебного заведения заново:",
         reply_markup=kb_back_cancel(),
     )
 
@@ -762,15 +799,29 @@ async def cb_mat_skip(call: CallbackQuery, state: FSMContext) -> None:
     await _go_to_phone(call.message, state)
 
 
-@router.callback_query(F.data == "mat_more", StateFilter(OrderStates.adding_materials))
+@router.callback_query(
+    F.data == "mat_more",
+    StateFilter(
+        OrderStates.adding_materials, OrderStates.adding_materials_text,
+        OrderStates.adding_materials_voice, OrderStates.adding_materials_file,
+    ),
+)
 async def cb_mat_more(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
+    await state.set_state(OrderStates.adding_materials)
     await _show_materials_menu(call.message)
 
 
-@router.callback_query(F.data == "mat_done", StateFilter(OrderStates.adding_materials))
+@router.callback_query(
+    F.data == "mat_done",
+    StateFilter(
+        OrderStates.adding_materials, OrderStates.adding_materials_text,
+        OrderStates.adding_materials_voice, OrderStates.adding_materials_file,
+    ),
+)
 async def cb_mat_done(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
+    await state.set_state(OrderStates.adding_materials)
     await _go_to_phone(call.message, state)
 
 
