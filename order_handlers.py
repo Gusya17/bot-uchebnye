@@ -1,12 +1,15 @@
 """
-Роутер сценария приёма заявки (шаги 0–13).
-Все кнопки — inline. Текст вместо кнопки → напоминание + повторный показ кнопок.
-/cancel в любом шаге → главное меню, черновик не удаляется.
+Роутер сценария приёма заявки (шаги 0–13) + «⚡ Дополнить заказ».
+⬅️ Назад на каждом шаге — возвращает к предыдущему с сохранёнными данными.
+❌ Отменить — главное меню, черновик не удаляется.
+/cancel — то же самое командой.
 """
 
 import logging
+import re
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.types import (
     CallbackQuery,
@@ -17,11 +20,49 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 
 from order_states import OrderStates
+from orders_db import has_active_order, save_order
 
 router = Router()
 log = logging.getLogger(__name__)
 
-# Маппинг состояния → номер шага (для экрана возобновления черновика)
+# Текст, который не является командой (не начинается с /)
+NON_COMMAND = F.text & ~F.text.startswith("/")
+
+# Только +7XXXXXXXXXX
+PHONE_RE = re.compile(r'^\+7\d{10}$')
+
+# Постоянные кнопки-строки
+_BTN_BACK   = [InlineKeyboardButton(text="⬅️ Назад",     callback_data="go_back")]
+_BTN_CANCEL = [InlineKeyboardButton(text="❌ Отменить",   callback_data="order_cancel")]
+
+# Маппинг: текущее состояние → предыдущее (для ⬅️ Назад)
+PREV_STATE: dict = {
+    OrderStates.choosing_type.state:            OrderStates.checking_direction,
+    OrderStates.entering_name.state:            OrderStates.choosing_type,
+    OrderStates.entering_institution.state:     OrderStates.entering_name,
+    OrderStates.entering_faculty.state:         OrderStates.entering_institution,
+    OrderStates.entering_specialization.state:  OrderStates.entering_faculty,
+    OrderStates.choosing_course.state:          OrderStates.entering_specialization,
+    OrderStates.choosing_study_form.state:      OrderStates.choosing_course,
+    OrderStates.entering_topic.state:           OrderStates.choosing_study_form,
+    OrderStates.confirming_topic.state:         OrderStates.entering_topic,
+    OrderStates.entering_volume.state:          OrderStates.confirming_topic,
+    OrderStates.entering_volume_custom.state:   OrderStates.entering_volume,
+    OrderStates.entering_uniqueness.state:      OrderStates.entering_volume,
+    OrderStates.choosing_deadline.state:        OrderStates.entering_uniqueness,
+    OrderStates.entering_deadline_custom.state: OrderStates.choosing_deadline,
+    OrderStates.adding_materials.state:         OrderStates.choosing_deadline,
+    OrderStates.adding_materials_text.state:    OrderStates.adding_materials,
+    OrderStates.adding_materials_voice.state:   OrderStates.adding_materials,
+    OrderStates.adding_materials_file.state:    OrderStates.adding_materials,
+    OrderStates.entering_phone.state:           OrderStates.adding_materials,
+    OrderStates.asking_email.state:             OrderStates.entering_phone,
+    OrderStates.entering_email.state:           OrderStates.asking_email,
+    OrderStates.showing_trust.state:            OrderStates.asking_email,
+    OrderStates.confirming.state:               OrderStates.showing_trust,
+}
+
+# Маппинг состояния → номер шага
 STATE_STEP: dict[str, str] = {
     OrderStates.checking_direction.state:       "0",
     OrderStates.choosing_type.state:            "1 из 13",
@@ -60,19 +101,31 @@ TRUST_TEXT = (
 )
 
 
+# ─── Вспомогательная функция подтверждения callback ──────────────────────────
+
+async def ack(call: CallbackQuery) -> None:
+    """Подтверждает callback, игнорируя ошибку «query is too old» (нестабильный VPN)."""
+    try:
+        await call.answer()
+    except TelegramBadRequest:
+        pass
+
+
 # ─── Клавиатуры ──────────────────────────────────────────────────────────────
 
 def kb_resume() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="▶️ Продолжить", callback_data="resume_continue")],
+        [InlineKeyboardButton(text="▶️ Продолжить",    callback_data="resume_continue")],
         [InlineKeyboardButton(text="🔄 Начать заново", callback_data="resume_restart")],
     ])
 
 
 def kb_direction() -> InlineKeyboardMarkup:
+    # Первый шаг — нет «Назад»
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, гуманитарная", callback_data="dir_yes")],
-        [InlineKeyboardButton(text="❌ Технические / точные науки", callback_data="dir_no")],
+        [InlineKeyboardButton(text="✅ Да, гуманитарная",              callback_data="dir_yes")],
+        [InlineKeyboardButton(text="❌ Технические / точные науки",    callback_data="dir_no")],
+        _BTN_CANCEL,
     ])
 
 
@@ -82,114 +135,149 @@ def kb_work_type() -> InlineKeyboardMarkup:
         "Диплом бакалавра", "Диплом магистра",
         "Доклад к защите + Презентация", "Другое",
     ]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=f"type_{t}")] for t in types]
-    )
+    rows = [[InlineKeyboardButton(text=t, callback_data=f"type_{t}")] for t in types]
+    rows += [_BTN_BACK, _BTN_CANCEL]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_course() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=str(c), callback_data=f"course_{c}") for c in range(1, 7)]
+        [InlineKeyboardButton(text=str(c), callback_data=f"course_{c}") for c in range(1, 7)],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_study_form() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Очная", callback_data="form_Очная")],
-        [InlineKeyboardButton(text="Заочная", callback_data="form_Заочная")],
+        [InlineKeyboardButton(text="Очная",        callback_data="form_Очная")],
+        [InlineKeyboardButton(text="Заочная",      callback_data="form_Заочная")],
         [InlineKeyboardButton(text="Очно-заочная", callback_data="form_Очно-заочная")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_confirm_topic() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, верно", callback_data="topic_ok")],
-        [InlineKeyboardButton(text="✏️ Ввести заново", callback_data="topic_retry")],
+        [InlineKeyboardButton(text="✅ Да, верно",       callback_data="topic_ok")],
+        [InlineKeyboardButton(text="✏️ Ввести заново",  callback_data="topic_retry")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_volume() -> InlineKeyboardMarkup:
     options = ["до 10 стр.", "10–20 стр.", "20–40 стр.", "40–60 стр.", "60+ стр.", "Введу сам"]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=o, callback_data=f"vol_{o}")] for o in options]
-    )
+    rows = [[InlineKeyboardButton(text=o, callback_data=f"vol_{o}")] for o in options]
+    rows += [_BTN_BACK, _BTN_CANCEL]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_uniqueness() -> InlineKeyboardMarkup:
     options = ["60%", "70%", "80%", "85%", "90%+", "Не знаю / не указано"]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=o, callback_data=f"uniq_{o}")] for o in options]
-    )
+    rows = [[InlineKeyboardButton(text=o, callback_data=f"uniq_{o}")] for o in options]
+    rows += [_BTN_BACK, _BTN_CANCEL]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_deadline() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="до 7 дней", callback_data="dl_7")],
-        [InlineKeyboardButton(text="до 14 дней", callback_data="dl_14")],
-        [InlineKeyboardButton(text="до 30 дней", callback_data="dl_30")],
-        [InlineKeyboardButton(text="📅 Другой срок...", callback_data="dl_custom")],
+        [InlineKeyboardButton(text="до 7 дней",          callback_data="dl_7")],
+        [InlineKeyboardButton(text="до 14 дней",         callback_data="dl_14")],
+        [InlineKeyboardButton(text="до 30 дней",         callback_data="dl_30")],
+        [InlineKeyboardButton(text="📅 Другой срок...",  callback_data="dl_custom")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_materials() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Написать комментарий", callback_data="mat_text")],
-        [InlineKeyboardButton(text="🎤 Надиктовать", callback_data="mat_voice")],
-        [InlineKeyboardButton(text="📎 Прикрепить файлы", callback_data="mat_file")],
-        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="mat_skip")],
+        [InlineKeyboardButton(text="✍️ Написать комментарий",             callback_data="mat_text")],
+        [InlineKeyboardButton(text="🎤 Надиктовать комментарий голосом",  callback_data="mat_voice")],
+        [InlineKeyboardButton(text="📎 Прикрепить требования от вуза",    callback_data="mat_file")],
+        [InlineKeyboardButton(text="⏭️ Пропустить",                       callback_data="mat_skip")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_materials_more() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить ещё", callback_data="mat_more")],
-        [InlineKeyboardButton(text="✅ Готово", callback_data="mat_done")],
+        [InlineKeyboardButton(text="✅ Готово",        callback_data="mat_done")],
+        _BTN_CANCEL,
     ])
 
 
 def kb_email() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📧 Добавить email", callback_data="email_add")],
-        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="email_skip")],
+        [InlineKeyboardButton(text="⏭️ Пропустить",    callback_data="email_skip")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_trust() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📨 Отправить заявку", callback_data="trust_send")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_confirm_order() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Отправить заявку", callback_data="confirm_yes")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="confirm_no")],
+        _BTN_BACK,
+        [InlineKeyboardButton(text="❌ Отменить",         callback_data="confirm_no")],
+    ])
+
+
+def kb_back_cancel() -> InlineKeyboardMarkup:
+    """Назад + Отменить — для шагов с текстовым вводом."""
+    return InlineKeyboardMarkup(inline_keyboard=[_BTN_BACK, _BTN_CANCEL])
+
+
+def kb_only_cancel() -> InlineKeyboardMarkup:
+    """Только Отменить — для первого шага и суб-состояний."""
+    return InlineKeyboardMarkup(inline_keyboard=[_BTN_CANCEL])
+
+
+def kb_topic_reentry() -> InlineKeyboardMarkup:
+    """При повторном вводе темы — кнопка вернуться к старой."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Оставить прежнюю тему", callback_data="topic_keep")],
+        _BTN_BACK, _BTN_CANCEL,
     ])
 
 
 def kb_main_menu() -> InlineKeyboardMarkup:
-    """Упрощённое главное меню — показывается после cancel/reject/завершения."""
+    """Упрощённое главное меню после cancel/reject/завершения."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💬 Цитата", callback_data="quote"),
-            InlineKeyboardButton(text="💡 Совет", callback_data="tip"),
+            InlineKeyboardButton(text="💬 Цитата",           callback_data="quote"),
+            InlineKeyboardButton(text="💡 Совет",            callback_data="tip"),
         ],
         [
-            InlineKeyboardButton(text="📝 Заказать работу", callback_data="start_order"),
-            InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
+            InlineKeyboardButton(text="📝 Заказать работу",  callback_data="start_order"),
+            InlineKeyboardButton(text="❓ Помощь",           callback_data="help"),
         ],
+        [InlineKeyboardButton(text="⚡ Дополнить заказ",     callback_data="urgent_order")],
+    ])
+
+
+def kb_urgent() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Написать текстом",    callback_data="urg_text")],
+        [InlineKeyboardButton(text="🎤 Надиктовать голосом", callback_data="urg_voice")],
+        [InlineKeyboardButton(text="📎 Прикрепить файл",     callback_data="urg_file")],
+        [InlineKeyboardButton(text="❌ Отмена",              callback_data="urg_cancel")],
     ])
 
 
 # ─── Форматирование брифа ─────────────────────────────────────────────────────
 
 def format_brief(data: dict) -> str:
-    """Собирает все поля заявки в читаемый текстовый бриф."""
     materials = data.get("materials", [])
     materials_str = "\n  • ".join(materials) if materials else "—"
     if materials:
         materials_str = "\n  • " + materials_str
-
     return (
         f"<b>📋 Заявка на учебную работу</b>\n\n"
         f"👤 <b>ФИО:</b> {data.get('name', '—')}\n"
@@ -211,10 +299,9 @@ def format_brief(data: dict) -> str:
     )
 
 
-# ─── Показ текущего шага при возобновлении черновика ─────────────────────────
+# ─── Показ текущего шага (resume / go_back / guard) ──────────────────────────
 
 async def show_current_step(message: Message, state: FSMContext) -> None:
-    """Повторно показывает UI текущего шага — для resume и гварда неверного ввода."""
     current = await state.get_state()
     data = await state.get_data()
 
@@ -225,17 +312,28 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         await message.answer("Шаг 1 из 13\n\nВыберите тип работы:", reply_markup=kb_work_type())
 
     elif current == OrderStates.entering_name.state:
-        await message.answer("Шаг 2 из 13\n\n👤 Введите ФИО (Фамилия Имя Отчество):")
-
+        await message.answer(
+            "Шаг 2 из 13\n\n👤 Введите ФИО полностью — Фамилия Имя Отчество:\n"
+            "(как в паспорте, без сокращений)",
+            reply_markup=kb_back_cancel(),
+        )
     elif current == OrderStates.entering_institution.state:
-        await message.answer("Шаг 3 из 13\n\n🏛 Введите название учебного заведения:")
-
+        await message.answer(
+            "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
+            reply_markup=kb_back_cancel(),
+        )
     elif current == OrderStates.entering_faculty.state:
-        await message.answer("Шаг 4 из 13\n\n🏫 Введите факультет:")
-
+        await message.answer(
+            "Шаг 4 из 13\n\n🏫 Введите название факультета полностью:\n"
+            "(без сокращений — как в документах учебного заведения)",
+            reply_markup=kb_back_cancel(),
+        )
     elif current == OrderStates.entering_specialization.state:
-        await message.answer("Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки:")
-
+        await message.answer(
+            "Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки полностью:\n"
+            "(например: «Государственное и муниципальное управление», не «ГМУ»)",
+            reply_markup=kb_back_cancel(),
+        )
     elif current == OrderStates.choosing_course.state:
         await message.answer("Шаг 6 из 13\n\n📅 Выберите курс:", reply_markup=kb_course())
 
@@ -243,7 +341,9 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         await message.answer("Шаг 7 из 13\n\n📖 Выберите форму обучения:", reply_markup=kb_study_form())
 
     elif current == OrderStates.entering_topic.state:
-        await message.answer("Шаг 8 из 13\n\n📝 Введите тему работы:")
+        saved = data.get("topic")
+        kb = kb_topic_reentry() if saved else kb_back_cancel()
+        await message.answer("Шаг 8 из 13\n\n📝 Введите тему работы:", reply_markup=kb)
 
     elif current == OrderStates.confirming_topic.state:
         topic = data.get("topic", "")
@@ -251,27 +351,21 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
             f"Подтвердите тему:\n\n«{topic}»\n\nВсё верно?",
             reply_markup=kb_confirm_topic(),
         )
-
     elif current in (OrderStates.entering_volume.state, OrderStates.entering_volume_custom.state):
         await state.set_state(OrderStates.entering_volume)
         await message.answer(
             "Шаг 9 из 13\n\n📄 Выберите объём работы (количество страниц):",
             reply_markup=kb_volume(),
         )
-
     elif current == OrderStates.entering_uniqueness.state:
         await message.answer(
             "Шаг 10 из 13\n\n🔒 Требования к проверке на антиплагиат\n"
             "(минимальный процент уникальности):",
             reply_markup=kb_uniqueness(),
         )
-
     elif current in (OrderStates.choosing_deadline.state, OrderStates.entering_deadline_custom.state):
         await state.set_state(OrderStates.choosing_deadline)
-        await message.answer(
-            "Шаг 11 из 13\n\n⏰ Выберите желаемый срок сдачи:",
-            reply_markup=kb_deadline(),
-        )
+        await message.answer("Шаг 11 из 13\n\n⏰ Выберите желаемый срок сдачи:", reply_markup=kb_deadline())
 
     elif current in (
         OrderStates.adding_materials.state,
@@ -283,8 +377,10 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         await _show_materials_menu(message)
 
     elif current == OrderStates.entering_phone.state:
-        await message.answer("Шаг 13 из 13\n\n📱 Введите номер телефона для связи:")
-
+        await message.answer(
+            "Шаг 13 из 13\n\n📱 Введите номер телефона для связи:\nФормат: +79991234567",
+            reply_markup=kb_back_cancel(),
+        )
     elif current in (OrderStates.asking_email.state, OrderStates.entering_email.state):
         await state.set_state(OrderStates.asking_email)
         await message.answer("📧 Добавить email для связи?\n(необязательно)", reply_markup=kb_email())
@@ -295,7 +391,7 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
     elif current == OrderStates.confirming.state:
         brief = format_brief(data)
         await message.answer(
-            f"Проверьте данные заявки:\n\n{brief}\n\nВсё верно? Отправляем?",
+            f"Проверьте данные заявки:\n\n{brief}\n\nПроверьте данные и нажмите «Отправить заявку».",
             reply_markup=kb_confirm_order(),
             parse_mode="HTML",
         )
@@ -304,18 +400,19 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
 # ─── /order — точка входа ────────────────────────────────────────────────────
 
 @router.message(Command("order"))
-@router.callback_query(F.data == "start_order")
-async def cmd_order(event: Message | CallbackQuery, state: FSMContext) -> None:
-    """Проверяем черновик. Если есть — предлагаем продолжить, иначе — начинаем."""
-    # Нормализуем: CallbackQuery или Message
-    if isinstance(event, CallbackQuery):
-        await event.answer()
-        message = event.message
-    else:
-        message = event
+async def cmd_order(message: Message, state: FSMContext) -> None:
+    await _check_draft(message, state)
 
+
+@router.callback_query(F.data == "start_order")
+async def cb_start_order(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await _check_draft(call.message, state)
+
+
+async def _check_draft(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
-    if current is not None:
+    if current is not None and not current.startswith("OrderStates:urgent"):
         step = STATE_STEP.get(current, "?")
         await message.answer(
             f"💾 У вас есть незавершённая заявка.\n"
@@ -328,12 +425,11 @@ async def cmd_order(event: Message | CallbackQuery, state: FSMContext) -> None:
 
 
 async def _start_fresh(message: Message, state: FSMContext) -> None:
-    """Сбрасывает черновик и начинает сценарий заново."""
     await state.clear()
     await message.answer(
         "🎓 Привет! Я помогу оформить заявку на учебную работу.\n\n"
-        "Стоимость рассчитывается индивидуально под вашу работу — "
-        "вы получите ответ в течение 2 часов после заявки.\n\n"
+        "Стоимость рассчитывается индивидуально — вы получите ответ "
+        "в течение 2 часов после заявки.\n\n"
         "С нами — от заявки до защиты 🎓"
     )
     await message.answer("Ваша работа — гуманитарная дисциплина?", reply_markup=kb_direction())
@@ -344,46 +440,67 @@ async def _start_fresh(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "resume_continue")
 async def cb_resume_continue(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await call.message.answer("Продолжаем с того же места 👇")
     await show_current_step(call.message, state)
 
 
 @router.callback_query(F.data == "resume_restart")
 async def cb_resume_restart(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await _start_fresh(call.message, state)
 
 
-# ─── /cancel — выход без удаления черновика ───────────────────────────────────
+# ─── /cancel и кнопка «❌ Отменить» ──────────────────────────────────────────
 
 @router.message(Command("cancel"), StateFilter(OrderStates))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    """Прерывает сценарий. Черновик намеренно не удаляется — студент вернётся."""
-    # state.clear() НЕ вызываем — черновик должен остаться
     await message.answer(
         "Сценарий прерван. Ваш черновик сохранён — вернитесь к нему командой /order.",
         reply_markup=kb_main_menu(),
     )
 
 
+@router.callback_query(F.data == "order_cancel", StateFilter(OrderStates))
+async def cb_order_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await call.message.answer(
+        "Сценарий прерван. Ваш черновик сохранён — вернитесь к нему командой /order.",
+        reply_markup=kb_main_menu(),
+    )
+
+
+# ─── ⬅️ Назад ────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "go_back", StateFilter(OrderStates))
+async def cb_go_back(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    current = await state.get_state()
+    prev = PREV_STATE.get(current)
+    if prev is None:
+        # Первый шаг — некуда возвращаться
+        await show_current_step(call.message, state)
+        return
+    await state.set_state(prev)
+    await show_current_step(call.message, state)
+
+
 # ─── Шаг 0.5: направление ────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "dir_yes", StateFilter(OrderStates.checking_direction))
 async def cb_dir_yes(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.choosing_type)
     await call.message.answer("Шаг 1 из 13\n\nВыберите тип работы:", reply_markup=kb_work_type())
 
 
 @router.callback_query(F.data == "dir_no", StateFilter(OrderStates.checking_direction))
 async def cb_dir_no(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    await state.clear()
+    await ack(call)
     await call.message.answer(
         "😔 К сожалению, технические и точные науки — не моя специализация.\n"
-        "Я работаю только с гуманитарными направлениями.",
-        reply_markup=kb_main_menu(),
+        "Я работаю только с гуманитарными направлениями.\n\n"
+        "Если это ошибка — нажмите «✅ Да, гуманитарная» выше.",
     )
 
 
@@ -392,42 +509,57 @@ async def cb_dir_no(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("type_"), StateFilter(OrderStates.choosing_type))
 async def cb_work_type(call: CallbackQuery, state: FSMContext) -> None:
     work_type = call.data.removeprefix("type_")
-    await call.answer()
+    await ack(call)
     await state.update_data(work_type=work_type)
     await state.set_state(OrderStates.entering_name)
-    await call.message.answer("Шаг 2 из 13\n\n👤 Введите ФИО (Фамилия Имя Отчество):")
+    await call.message.answer(
+        "Шаг 2 из 13\n\n👤 Введите ФИО полностью — Фамилия Имя Отчество:\n"
+        "(как в паспорте, без сокращений)",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 2: ФИО ──────────────────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_name))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_name))
 async def msg_name(message: Message, state: FSMContext) -> None:
     await state.update_data(name=message.text.strip())
     await state.set_state(OrderStates.entering_institution)
-    await message.answer("Шаг 3 из 13\n\n🏛 Введите название учебного заведения:")
+    await message.answer(
+        "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 3: учебное заведение ────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_institution))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_institution))
 async def msg_institution(message: Message, state: FSMContext) -> None:
     await state.update_data(institution=message.text.strip())
     await state.set_state(OrderStates.entering_faculty)
-    await message.answer("Шаг 4 из 13\n\n🏫 Введите факультет:")
+    await message.answer(
+        "Шаг 4 из 13\n\n🏫 Введите название факультета полностью:\n"
+        "(без сокращений — как в документах учебного заведения)",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 4: факультет ────────────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_faculty))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_faculty))
 async def msg_faculty(message: Message, state: FSMContext) -> None:
     await state.update_data(faculty=message.text.strip())
     await state.set_state(OrderStates.entering_specialization)
-    await message.answer("Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки:")
+    await message.answer(
+        "Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки полностью:\n"
+        "(например: «Государственное и муниципальное управление», не «ГМУ»)",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 5: специализация ────────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_specialization))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_specialization))
 async def msg_specialization(message: Message, state: FSMContext) -> None:
     await state.update_data(specialization=message.text.strip())
     await state.set_state(OrderStates.choosing_course)
@@ -439,12 +571,10 @@ async def msg_specialization(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("course_"), StateFilter(OrderStates.choosing_course))
 async def cb_course(call: CallbackQuery, state: FSMContext) -> None:
     course = call.data.removeprefix("course_")
-    await call.answer()
+    await ack(call)
     await state.update_data(course=course)
     await state.set_state(OrderStates.choosing_study_form)
-    await call.message.answer(
-        "Шаг 7 из 13\n\n📖 Выберите форму обучения:", reply_markup=kb_study_form()
-    )
+    await call.message.answer("Шаг 7 из 13\n\n📖 Выберите форму обучения:", reply_markup=kb_study_form())
 
 
 # ─── Шаг 7: форма обучения ───────────────────────────────────────────────────
@@ -452,15 +582,18 @@ async def cb_course(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("form_"), StateFilter(OrderStates.choosing_study_form))
 async def cb_study_form(call: CallbackQuery, state: FSMContext) -> None:
     form = call.data.removeprefix("form_")
-    await call.answer()
+    await ack(call)
     await state.update_data(study_form=form)
     await state.set_state(OrderStates.entering_topic)
-    await call.message.answer("Шаг 8 из 13\n\n📝 Введите тему работы:")
+    await call.message.answer(
+        "Шаг 8 из 13\n\n📝 Введите тему работы:",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 8: тема ─────────────────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_topic))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_topic))
 async def msg_topic(message: Message, state: FSMContext) -> None:
     topic = message.text.strip()
     await state.update_data(topic=topic)
@@ -475,7 +608,7 @@ async def msg_topic(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "topic_ok", StateFilter(OrderStates.confirming_topic))
 async def cb_topic_ok(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.entering_volume)
     await call.message.answer(
         "Шаг 9 из 13\n\n📄 Выберите объём работы (количество страниц):",
@@ -485,9 +618,21 @@ async def cb_topic_ok(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "topic_retry", StateFilter(OrderStates.confirming_topic))
 async def cb_topic_retry(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.entering_topic)
-    await call.message.answer("📝 Введите тему работы заново:")
+    await call.message.answer("📝 Введите тему работы заново:", reply_markup=kb_topic_reentry())
+
+
+@router.callback_query(F.data == "topic_keep", StateFilter(OrderStates.entering_topic))
+async def cb_topic_keep(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    data = await state.get_data()
+    topic = data.get("topic", "")
+    await state.set_state(OrderStates.confirming_topic)
+    await call.message.answer(
+        f"Подтвердите тему:\n\n«{topic}»\n\nВсё верно?",
+        reply_markup=kb_confirm_topic(),
+    )
 
 
 # ─── Шаг 9: объём ────────────────────────────────────────────────────────────
@@ -495,11 +640,13 @@ async def cb_topic_retry(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("vol_"), StateFilter(OrderStates.entering_volume))
 async def cb_volume(call: CallbackQuery, state: FSMContext) -> None:
     volume = call.data.removeprefix("vol_")
-    await call.answer()
-
+    await ack(call)
     if volume == "Введу сам":
         await state.set_state(OrderStates.entering_volume_custom)
-        await call.message.answer("Введите количество страниц (например: «35 страниц»):")
+        await call.message.answer(
+            "Введите количество страниц (например: «35 страниц»):",
+            reply_markup=kb_back_cancel(),
+        )
     else:
         await state.update_data(volume=volume)
         await state.set_state(OrderStates.entering_uniqueness)
@@ -510,7 +657,7 @@ async def cb_volume(call: CallbackQuery, state: FSMContext) -> None:
         )
 
 
-@router.message(F.text, StateFilter(OrderStates.entering_volume_custom))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_volume_custom))
 async def msg_volume_custom(message: Message, state: FSMContext) -> None:
     await state.update_data(volume=message.text.strip())
     await state.set_state(OrderStates.entering_uniqueness)
@@ -526,7 +673,7 @@ async def msg_volume_custom(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data.startswith("uniq_"), StateFilter(OrderStates.entering_uniqueness))
 async def cb_uniqueness(call: CallbackQuery, state: FSMContext) -> None:
     uniq = call.data.removeprefix("uniq_")
-    await call.answer()
+    await ack(call)
     await state.update_data(uniqueness=uniq)
     await state.set_state(OrderStates.choosing_deadline)
     await call.message.answer(
@@ -544,13 +691,13 @@ _DEADLINE_LABELS = {"dl_7": "до 7 дней", "dl_14": "до 14 дней", "dl_
     StateFilter(OrderStates.choosing_deadline),
 )
 async def cb_deadline(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-
+    await ack(call)
     if call.data == "dl_custom":
         await state.set_state(OrderStates.entering_deadline_custom)
         await call.message.answer(
             "Введите желаемую дату получения работы\n"
-            "(например: «15 июня» или «через 3 недели»):"
+            "(например: «15 июня» или «через 3 недели»):",
+            reply_markup=kb_back_cancel(),
         )
     else:
         await state.update_data(deadline=_DEADLINE_LABELS[call.data])
@@ -558,7 +705,7 @@ async def cb_deadline(call: CallbackQuery, state: FSMContext) -> None:
         await _show_materials_menu(call.message)
 
 
-@router.message(F.text, StateFilter(OrderStates.entering_deadline_custom))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_deadline_custom))
 async def msg_deadline_custom(message: Message, state: FSMContext) -> None:
     await state.update_data(deadline=message.text.strip())
     await state.set_state(OrderStates.adding_materials)
@@ -581,48 +728,49 @@ async def _show_materials_menu(message: Message) -> None:
 
 @router.callback_query(F.data == "mat_text", StateFilter(OrderStates.adding_materials))
 async def cb_mat_text(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.adding_materials_text)
-    await call.message.answer("✍️ Введите комментарий или пожелания к работе:")
+    await call.message.answer("✍️ Введите комментарий или пожелания к работе:", reply_markup=kb_only_cancel())
 
 
 @router.callback_query(F.data == "mat_voice", StateFilter(OrderStates.adding_materials))
 async def cb_mat_voice(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.adding_materials_voice)
-    await call.message.answer("🎤 Запишите голосовое сообщение с особыми требованиями и пожеланиями:")
+    await call.message.answer("🎤 Запишите голосовое сообщение:", reply_markup=kb_only_cancel())
 
 
 @router.callback_query(F.data == "mat_file", StateFilter(OrderStates.adding_materials))
 async def cb_mat_file(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.adding_materials_file)
     await call.message.answer(
-        "📎 Отправьте файл:\n"
-        "(методрекомендации, пример работы, административный лист, "
-        "титульный лист — любой формат)"
+        "📎 Прикрепите требования от учебного заведения:\n"
+        "методрекомендации, пример оформления, административный лист, "
+        "титульный лист — любой формат, любое количество.",
+        reply_markup=kb_only_cancel(),
     )
 
 
 @router.callback_query(F.data == "mat_skip", StateFilter(OrderStates.adding_materials))
 async def cb_mat_skip(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await _go_to_phone(call.message, state)
 
 
 @router.callback_query(F.data == "mat_more", StateFilter(OrderStates.adding_materials))
 async def cb_mat_more(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await _show_materials_menu(call.message)
 
 
 @router.callback_query(F.data == "mat_done", StateFilter(OrderStates.adding_materials))
 async def cb_mat_done(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await _go_to_phone(call.message, state)
 
 
-@router.message(F.text, StateFilter(OrderStates.adding_materials_text))
+@router.message(NON_COMMAND, StateFilter(OrderStates.adding_materials_text))
 async def msg_mat_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     materials = data.get("materials", [])
@@ -663,51 +811,57 @@ async def msg_mat_photo(message: Message, state: FSMContext) -> None:
     await message.answer("✅ Фото получено.", reply_markup=kb_materials_more())
 
 
-# Гвард: пользователь пишет текст вместо голосового
-@router.message(F.text, StateFilter(OrderStates.adding_materials_voice))
+@router.message(NON_COMMAND, StateFilter(OrderStates.adding_materials_voice))
 async def guard_voice_state(message: Message) -> None:
-    await message.answer("Пожалуйста, запишите голосовое сообщение 🎤")
+    await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
 
 
-# Гвард: пользователь пишет текст вместо файла
-@router.message(F.text, StateFilter(OrderStates.adding_materials_file))
+@router.message(NON_COMMAND, StateFilter(OrderStates.adding_materials_file))
 async def guard_file_state(message: Message) -> None:
-    await message.answer("Пожалуйста, прикрепите файл или фото 📎")
+    await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
 
 
 async def _go_to_phone(message: Message, state: FSMContext) -> None:
     await state.set_state(OrderStates.entering_phone)
-    await message.answer("Шаг 13 из 13\n\n📱 Введите номер телефона для связи:\n(обязательно)")
+    await message.answer(
+        "Шаг 13 из 13\n\n📱 Введите номер телефона для связи:\nФормат: +79991234567",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 13: телефон ─────────────────────────────────────────────────────────
 
-@router.message(F.text, StateFilter(OrderStates.entering_phone))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_phone))
 async def msg_phone(message: Message, state: FSMContext) -> None:
-    await state.update_data(phone=message.text.strip())
+    raw = re.sub(r"[\s\-\(\)]", "", message.text.strip())
+    if not PHONE_RE.match(raw):
+        await message.answer(
+            "Неверный формат. Введите номер в формате +79991234567:",
+            reply_markup=kb_back_cancel(),
+        )
+        return
+    await state.update_data(phone=raw)
     await state.set_state(OrderStates.asking_email)
-    await message.answer(
-        "📧 Добавить email для связи?\n(необязательно)", reply_markup=kb_email()
-    )
+    await message.answer("📧 Добавить email для связи?\n(необязательно)", reply_markup=kb_email())
 
 
 # ─── Шаг 13.1: email ─────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "email_add", StateFilter(OrderStates.asking_email))
 async def cb_email_add(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.set_state(OrderStates.entering_email)
-    await call.message.answer("✉️ Введите ваш email:")
+    await call.message.answer("✉️ Введите ваш email:", reply_markup=kb_back_cancel())
 
 
 @router.callback_query(F.data == "email_skip", StateFilter(OrderStates.asking_email))
 async def cb_email_skip(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     await state.update_data(email="—")
     await _show_trust(call.message, state)
 
 
-@router.message(F.text, StateFilter(OrderStates.entering_email))
+@router.message(NON_COMMAND, StateFilter(OrderStates.entering_email))
 async def msg_email(message: Message, state: FSMContext) -> None:
     await state.update_data(email=message.text.strip())
     await _show_trust(message, state)
@@ -722,16 +876,14 @@ async def _show_trust(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "trust_send", StateFilter(OrderStates.showing_trust))
 async def cb_trust_send(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    # Записываем Telegram-данные пользователя перед показом брифа
+    await ack(call)
     username = f"@{call.from_user.username}" if call.from_user.username else "нет"
     await state.update_data(tg_id=call.from_user.id, tg_username=username)
     data = await state.get_data()
-
     brief = format_brief(data)
     await state.set_state(OrderStates.confirming)
     await call.message.answer(
-        f"Проверьте данные заявки:\n\n{brief}\n\nВсё верно? Отправляем?",
+        f"Проверьте данные заявки:\n\n{brief}\n\nПроверьте данные и нажмите «Отправить заявку».",
         reply_markup=kb_confirm_order(),
         parse_mode="HTML",
     )
@@ -741,10 +893,9 @@ async def cb_trust_send(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "confirm_yes", StateFilter(OrderStates.confirming))
 async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
+    await ack(call)
     data = await state.get_data()
 
-    # Выводим бриф в консоль — здесь потом подключим уведомления владельцу
     log.info("=" * 60)
     log.info("НОВАЯ ЗАЯВКА")
     log.info("=" * 60)
@@ -752,7 +903,11 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
         log.info("  %s: %s", key, value)
     log.info("=" * 60)
 
-    await state.clear()  # черновик удаляется только после успешной отправки
+    tg_id = data.get("tg_id", call.from_user.id)
+    tg_username = data.get("tg_username", "нет")
+    await save_order(tg_id, tg_username)
+
+    await state.clear()
     await call.message.answer(
         "✅ <b>Заявка принята!</b>\n\n"
         "Мы изучим ваши материалы и в течение 2 часов пришлём сообщение со стоимостью работы.\n\n"
@@ -764,17 +919,86 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "confirm_no", StateFilter(OrderStates.confirming))
 async def cb_confirm_no(call: CallbackQuery, state: FSMContext) -> None:
-    """Отмена на экране подтверждения — черновик сохраняется."""
-    await call.answer()
+    await ack(call)
     await call.message.answer(
         "Заявка отменена. Черновик сохранён — вернитесь к нему командой /order.",
         reply_markup=kb_main_menu(),
     )
 
 
+# ─── ⚡ Дополнить заказ ───────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "urgent_order")
+async def cb_urgent_order(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    tg_id = call.from_user.id
+    if not await has_active_order(tg_id):
+        await call.message.answer(
+            "У вас пока нет активных заказов.\n\n"
+            "Оформите заявку — и кнопка «⚡ Дополнить заказ» станет доступна."
+        )
+        return
+    await state.set_state(OrderStates.urgent_menu)
+    await call.message.answer(
+        "⚡ <b>Дополнить заказ</b>\n\n"
+        "Что нужно передать специалисту?",
+        reply_markup=kb_urgent(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "urg_text", StateFilter(OrderStates.urgent_menu))
+async def cb_urg_text(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.urgent_text)
+    await call.message.answer("✍️ Напишите уточнение:", reply_markup=kb_only_cancel())
+
+
+@router.callback_query(F.data == "urg_voice", StateFilter(OrderStates.urgent_menu))
+async def cb_urg_voice(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.urgent_voice)
+    await call.message.answer("🎤 Запишите голосовое:", reply_markup=kb_only_cancel())
+
+
+@router.callback_query(F.data == "urg_file", StateFilter(OrderStates.urgent_menu))
+async def cb_urg_file(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.urgent_file)
+    await call.message.answer("📎 Прикрепите файл:", reply_markup=kb_only_cancel())
+
+
+@router.callback_query(F.data == "urg_cancel", StateFilter(OrderStates.urgent_menu))
+async def cb_urg_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.clear()
+    await call.message.answer("Хорошо, дополнение отменено.", reply_markup=kb_main_menu())
+
+
+@router.message(NON_COMMAND, StateFilter(OrderStates.urgent_text))
+async def msg_urgent_text(message: Message, state: FSMContext) -> None:
+    log.info("ДОПОЛНЕНИЕ (текст) от %s: %s", message.from_user.id, message.text)
+    await state.clear()
+    await message.answer("✅ Передано специалисту!", reply_markup=kb_main_menu())
+
+
+@router.message(F.voice, StateFilter(OrderStates.urgent_voice))
+async def msg_urgent_voice(message: Message, state: FSMContext) -> None:
+    log.info("ДОПОЛНЕНИЕ (голос) от %s: file_id=%s", message.from_user.id, message.voice.file_id)
+    await state.clear()
+    await message.answer("✅ Голосовое передано специалисту!", reply_markup=kb_main_menu())
+
+
+@router.message(F.document | F.photo, StateFilter(OrderStates.urgent_file))
+async def msg_urgent_file(message: Message, state: FSMContext) -> None:
+    fid = message.document.file_id if message.document else message.photo[-1].file_id
+    log.info("ДОПОЛНЕНИЕ (файл) от %s: file_id=%s", message.from_user.id, fid)
+    await state.clear()
+    await message.answer("✅ Файл передан специалисту!", reply_markup=kb_main_menu())
+
+
 # ─── Гвард: текст вместо кнопки ──────────────────────────────────────────────
 
-# Состояния, где пользователь обязан нажать кнопку, а не писать текст
 _BUTTON_ONLY = StateFilter(
     OrderStates.checking_direction,
     OrderStates.choosing_type,
@@ -788,10 +1012,11 @@ _BUTTON_ONLY = StateFilter(
     OrderStates.asking_email,
     OrderStates.showing_trust,
     OrderStates.confirming,
+    OrderStates.urgent_menu,
 )
 
 
-@router.message(F.text, _BUTTON_ONLY)
+@router.message(NON_COMMAND, _BUTTON_ONLY)
 async def guard_button_only(message: Message, state: FSMContext) -> None:
     await message.answer("Пожалуйста, нажми одну из кнопок 👇")
     await show_current_step(message, state)

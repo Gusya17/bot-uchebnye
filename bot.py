@@ -58,12 +58,11 @@ def main_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="📝 Мои заметки", callback_data="notes"),
-            InlineKeyboardButton(text="ℹ️ О боте", callback_data="about"),
-            InlineKeyboardButton(text="❓ Помощь", callback_data="help"),
+            InlineKeyboardButton(text="ℹ️ О боте",      callback_data="about"),
+            InlineKeyboardButton(text="❓ Помощь",       callback_data="help"),
         ],
-        [
-            InlineKeyboardButton(text="🎓 Заказать работу", callback_data="start_order"),
-        ],
+        [InlineKeyboardButton(text="🎓 Заказать работу",  callback_data="start_order")],
+        [InlineKeyboardButton(text="⚡ Дополнить заказ",  callback_data="urgent_order")],
     ])
 
 
@@ -104,9 +103,9 @@ async def handle_help(message: Message):
 # ── /about ───────────────────────────────────────────────────────────────────
 
 ABOUT_TEXT = (
-    "🎓 <b>Бот-диспетчер учебных работ «Инга»</b>\n\n"
-    "Помогаю студентам оформить заказ на написание учебных работ: "
-    "дипломы, диссертации, рефераты, курсовые, контрольные и другие.\n\n"
+    "🎓 <b>Помощник по учебным работам</b>\n\n"
+    "Помогу с выполнением учебных работ — дипломов, диссертаций, рефератов, "
+    "курсовых, контрольных и других.\n\n"
     "Я собираю все детали заказа и передаю готовый бриф специалисту — "
     "без лишних переспросов и потери информации.\n\n"
     "Просто опишите вашу работу, а я всё организую. 📚"

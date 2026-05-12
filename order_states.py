@@ -36,7 +36,7 @@ class SQLiteStorage(BaseStorage):
     def _pk(self, key: StorageKey) -> tuple:
         return (key.bot_id, key.chat_id, key.user_id)
 
-    async def set_state(self, bot, key: StorageKey, state: StateType = None) -> None:
+    async def set_state(self, key: StorageKey, state: StateType = None) -> None:
         state_str = state.state if hasattr(state, "state") else state
         async with self._lock:
             async with aiosqlite.connect(self._db_path) as db:
@@ -52,7 +52,7 @@ class SQLiteStorage(BaseStorage):
                 )
                 await db.commit()
 
-    async def get_state(self, bot, key: StorageKey) -> Optional[str]:
+    async def get_state(self, key: StorageKey) -> Optional[str]:
         async with aiosqlite.connect(self._db_path) as db:
             await self._ensure_table(db)
             async with db.execute(
@@ -62,7 +62,7 @@ class SQLiteStorage(BaseStorage):
                 row = await cur.fetchone()
                 return row[0] if row else None
 
-    async def set_data(self, bot, key: StorageKey, data: dict) -> None:
+    async def set_data(self, key: StorageKey, data: dict) -> None:
         async with self._lock:
             async with aiosqlite.connect(self._db_path) as db:
                 await self._ensure_table(db)
@@ -77,7 +77,7 @@ class SQLiteStorage(BaseStorage):
                 )
                 await db.commit()
 
-    async def get_data(self, bot, key: StorageKey) -> dict:
+    async def get_data(self, key: StorageKey) -> dict:
         async with aiosqlite.connect(self._db_path) as db:
             await self._ensure_table(db)
             async with db.execute(
@@ -116,3 +116,8 @@ class OrderStates(StatesGroup):
     entering_email = State()           # 13.1: ввод email
     showing_trust = State()            # экран гарантий
     confirming = State()               # финальное подтверждение
+    # ⚡ Дополнить заказ
+    urgent_menu = State()              # выбор типа дополнения
+    urgent_text = State()              # ожидание текста
+    urgent_voice = State()             # ожидание голосового
+    urgent_file = State()              # ожидание файла/фото
