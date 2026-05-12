@@ -477,10 +477,15 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "order_cancel", StateFilter(OrderStates))
 async def cb_order_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
-    await call.message.answer(
-        "Сценарий прерван. Ваш черновик сохранён — нажмите кнопку «Заказать работу».",
-        reply_markup=kb_main_menu(),
-    )
+    current = await state.get_state()
+    if current and current.startswith("OrderStates:urgent"):
+        await state.clear()
+        await call.message.answer("Отменено.", reply_markup=kb_main_menu())
+    else:
+        await call.message.answer(
+            "Сценарий прерван. Ваш черновик сохранён — нажмите кнопку «Заказать работу».",
+            reply_markup=kb_main_menu(),
+        )
 
 
 # ─── ⬅️ Назад ────────────────────────────────────────────────────────────────
@@ -509,7 +514,13 @@ async def reply_start_order(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "⚡ Дополнить заказ")
 async def reply_urgent_order(message: Message, state: FSMContext) -> None:
     tg_id = message.from_user.id
-    if not await has_active_order(tg_id):
+    try:
+        active = await has_active_order(tg_id)
+    except Exception:
+        log.exception("has_active_order failed for tg_id=%s", tg_id)
+        await message.answer("Произошла ошибка, попробуйте позже.")
+        return
+    if not active:
         await message.answer(
             "У вас пока нет активных заказов.\n\n"
             "Оформите заявку — и кнопка «⚡ Дополнить заказ» станет доступна."
@@ -768,7 +779,7 @@ async def msg_volume_custom(message: Message, state: FSMContext) -> None:
     await state.update_data(volume=message.text.strip())
     await state.set_state(OrderStates.entering_uniqueness)
     await message.answer(
-        "Шаг 10 из 13\n\n🔒 Требования к проверке на антиплагиат\n"
+        "Шаг 10 из 13\n\n🔒 Требования вашего учебного заведения к антиплагиату\n"
         "(минимальный процент уникальности):",
         reply_markup=kb_uniqueness(),
     )
@@ -1054,7 +1065,13 @@ async def cb_confirm_no(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_urgent_order(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
     tg_id = call.from_user.id
-    if not await has_active_order(tg_id):
+    try:
+        active = await has_active_order(tg_id)
+    except Exception:
+        log.exception("has_active_order failed for tg_id=%s", tg_id)
+        await call.message.answer("Произошла ошибка, попробуйте позже.")
+        return
+    if not active:
         await call.message.answer(
             "У вас пока нет активных заказов.\n\n"
             "Оформите заявку — и кнопка «⚡ Дополнить заказ» станет доступна."
