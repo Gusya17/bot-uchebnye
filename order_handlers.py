@@ -325,8 +325,7 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
 
     elif current == OrderStates.entering_name.state:
         await message.answer(
-            "Шаг 2 из 13\n\n👤 Введите ФИО полностью — Фамилия Имя Отчество:\n"
-            "(как в паспорте, без сокращений)",
+            "Шаг 2 из 13\n\n👤 Введите ФИО: Фамилия Имя Отчество (при наличии)",
             reply_markup=kb_back_cancel(),
         )
     elif current == OrderStates.entering_institution.state:
@@ -586,8 +585,7 @@ async def cb_work_type(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(work_type=work_type)
     await state.set_state(OrderStates.entering_name)
     await call.message.answer(
-        "Шаг 2 из 13\n\n👤 Введите ФИО полностью:\n"
-        "(минимум имя и фамилия, отчество — при наличии)",
+        "Шаг 2 из 13\n\n👤 Введите ФИО: Фамилия Имя Отчество (при наличии)",
         reply_markup=kb_back_cancel(),
     )
 
