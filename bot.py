@@ -52,17 +52,8 @@ TIPS = [
 def main_keyboard() -> InlineKeyboardMarkup:
     """Главное меню бота."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="💬 Цитата", callback_data="quote"),
-            InlineKeyboardButton(text="💡 Совет", callback_data="tip"),
-        ],
-        [
-            InlineKeyboardButton(text="📝 Мои заметки", callback_data="notes"),
-            InlineKeyboardButton(text="ℹ️ О боте",      callback_data="about"),
-            InlineKeyboardButton(text="❓ Помощь",       callback_data="help"),
-        ],
-        [InlineKeyboardButton(text="🎓 Заказать работу",  callback_data="start_order")],
-        [InlineKeyboardButton(text="⚡ Дополнить заказ",  callback_data="urgent_order")],
+        [InlineKeyboardButton(text="🎓 Заказать работу", callback_data="start_order")],
+        [InlineKeyboardButton(text="⚡ Дополнить заказ", callback_data="urgent_order")],
     ])
 
 

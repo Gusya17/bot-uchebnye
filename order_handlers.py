@@ -250,15 +250,8 @@ def kb_topic_reentry() -> InlineKeyboardMarkup:
 def kb_main_menu() -> InlineKeyboardMarkup:
     """Упрощённое главное меню после cancel/reject/завершения."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="💬 Цитата",           callback_data="quote"),
-            InlineKeyboardButton(text="💡 Совет",            callback_data="tip"),
-        ],
-        [
-            InlineKeyboardButton(text="📝 Заказать работу",  callback_data="start_order"),
-            InlineKeyboardButton(text="❓ Помощь",           callback_data="help"),
-        ],
-        [InlineKeyboardButton(text="⚡ Дополнить заказ",     callback_data="urgent_order")],
+        [InlineKeyboardButton(text="🎓 Заказать работу",  callback_data="start_order")],
+        [InlineKeyboardButton(text="⚡ Дополнить заказ",  callback_data="urgent_order")],
     ])
 
 
@@ -456,7 +449,7 @@ async def cb_resume_restart(call: CallbackQuery, state: FSMContext) -> None:
 @router.message(Command("cancel"), StateFilter(OrderStates))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await message.answer(
-        "Сценарий прерван. Ваш черновик сохранён — вернитесь к нему командой /order.",
+        "Сценарий прерван. Ваш черновик сохранён — нажмите кнопку «Заказать работу».",
         reply_markup=kb_main_menu(),
     )
 
@@ -465,7 +458,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def cb_order_cancel(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
     await call.message.answer(
-        "Сценарий прерван. Ваш черновик сохранён — вернитесь к нему командой /order.",
+        "Сценарий прерван. Ваш черновик сохранён — нажмите кнопку «Заказать работу».",
         reply_markup=kb_main_menu(),
     )
 
@@ -513,8 +506,8 @@ async def cb_work_type(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(work_type=work_type)
     await state.set_state(OrderStates.entering_name)
     await call.message.answer(
-        "Шаг 2 из 13\n\n👤 Введите ФИО полностью — Фамилия Имя Отчество:\n"
-        "(как в паспорте, без сокращений)",
+        "Шаг 2 из 13\n\n👤 Введите ФИО полностью:\n"
+        "(минимум имя и фамилия, отчество — при наличии)",
         reply_markup=kb_back_cancel(),
     )
 
@@ -523,7 +516,16 @@ async def cb_work_type(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(NON_COMMAND, StateFilter(OrderStates.entering_name))
 async def msg_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(name=message.text.strip())
+    name = message.text.strip()
+    words = name.split()
+    if len(words) < 2 or len(words) > 4:
+        await message.answer(
+            "Пожалуйста, введите имя и фамилию (можно с отчеством).\n"
+            "Например: «Иванова Мария» или «Иванов Иван Иванович».",
+            reply_markup=kb_back_cancel(),
+        )
+        return
+    await state.update_data(name=name)
     await state.set_state(OrderStates.entering_institution)
     await message.answer(
         "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
@@ -586,7 +588,8 @@ async def cb_study_form(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(study_form=form)
     await state.set_state(OrderStates.entering_topic)
     await call.message.answer(
-        "Шаг 8 из 13\n\n📝 Введите тему работы:",
+        "Шаг 8 из 13\n\n📝 Введите тему работы:\n"
+        "(так, как она указана в вашем задании или методичке)",
         reply_markup=kb_back_cancel(),
     )
 
@@ -717,10 +720,11 @@ async def msg_deadline_custom(message: Message, state: FSMContext) -> None:
 async def _show_materials_menu(message: Message) -> None:
     await message.answer(
         "Шаг 12 из 13 — по желанию\n\n"
-        "💬 <b>Комментарии и материалы</b>\n\n"
-        "Оставьте пожелания к работе — напишите текстом или надиктуйте голосовое.\n"
-        "Также прикрепите материалы от учебного заведения: методрекомендации, "
-        "примеры работ, административные листы, титульный лист.",
+        "📎 <b>Учебные материалы</b>\n\n"
+        "Прикрепите учебные материалы по вашей работе — методические рекомендации, "
+        "примеры, лабораторные, любые файлы от преподавателя.\n"
+        "Можно также написать комментарий или надиктовать голосом.\n"
+        "Или нажмите «Пропустить».",
         reply_markup=kb_materials(),
         parse_mode="HTML",
     )
@@ -921,7 +925,7 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_confirm_no(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
     await call.message.answer(
-        "Заявка отменена. Черновик сохранён — вернитесь к нему командой /order.",
+        "Заявка отменена. Черновик сохранён — нажмите кнопку «Заказать работу».",
         reply_markup=kb_main_menu(),
     )
 
