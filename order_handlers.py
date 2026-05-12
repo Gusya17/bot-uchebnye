@@ -378,7 +378,7 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         )
     elif current == OrderStates.entering_uniqueness.state:
         await message.answer(
-            "Шаг 10 из 13\n\n🔒 Требования к проверке на антиплагиат\n"
+            "Шаг 10 из 13\n\n🔒 Требования вашего учебного заведения к антиплагиату\n"
             "(минимальный процент уникальности):",
             reply_markup=kb_uniqueness(),
         )
@@ -757,7 +757,7 @@ async def cb_volume(call: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(volume=volume)
         await state.set_state(OrderStates.entering_uniqueness)
         await call.message.answer(
-            "Шаг 10 из 13\n\n🔒 Требования к проверке на антиплагиат\n"
+            "Шаг 10 из 13\n\n🔒 Требования вашего учебного заведения к антиплагиату\n"
             "(минимальный процент уникальности):",
             reply_markup=kb_uniqueness(),
         )
