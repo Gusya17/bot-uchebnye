@@ -242,7 +242,7 @@ def kb_trust() -> InlineKeyboardMarkup:
 
 def kb_confirm_order() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Отправить заявку", callback_data="confirm_yes")],
+        [InlineKeyboardButton(text="✅ Всё верно, отправить", callback_data="confirm_yes")],
         _BTN_BACK,
         [InlineKeyboardButton(text="❌ Отменить",         callback_data="confirm_no")],
     ])
@@ -331,8 +331,10 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         )
     elif current == OrderStates.entering_institution.state:
         await message.answer(
-            "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
+            "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:\n\n"
+            "<i>Например: Московский государственный университет им. М.В. Ломоносова</i>",
             reply_markup=kb_back_cancel(),
+            parse_mode="HTML",
         )
     elif current == OrderStates.confirming_institution.state:
         institution = data.get("institution", "")
@@ -594,8 +596,10 @@ async def msg_name(message: Message, state: FSMContext) -> None:
     await state.update_data(name=name)
     await state.set_state(OrderStates.entering_institution)
     await message.answer(
-        "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:",
+        "Шаг 3 из 13\n\n🏛 Введите название учебного заведения:\n\n"
+        "<i>Например: Московский государственный университет им. М.В. Ломоносова</i>",
         reply_markup=kb_back_cancel(),
+        parse_mode="HTML",
     )
 
 
@@ -628,8 +632,10 @@ async def cb_institution_retry(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
     await state.set_state(OrderStates.entering_institution)
     await call.message.answer(
-        "🏛 Введите название учебного заведения заново:",
+        "🏛 Введите название учебного заведения заново:\n\n"
+        "<i>Например: Московский государственный университет им. М.В. Ломоносова</i>",
         reply_markup=kb_back_cancel(),
+        parse_mode="HTML",
     )
 
 
