@@ -106,10 +106,10 @@ TRUST_TEXT = (
 # ─── Вспомогательная функция подтверждения callback ──────────────────────────
 
 async def ack(call: CallbackQuery) -> None:
-    """Подтверждает callback, игнорируя ошибку «query is too old» (нестабильный VPN)."""
+    """Подтверждает callback, игнорируя все сетевые и API-ошибки (VPN, query too old и т.п.)."""
     try:
         await call.answer()
-    except TelegramBadRequest:
+    except Exception:
         pass
 
 
@@ -134,12 +134,21 @@ def kb_direction() -> InlineKeyboardMarkup:
 def kb_work_type() -> InlineKeyboardMarkup:
     types = [
         "Контрольная", "Доклад", "Реферат", "Курсовая",
-        "Диплом бакалавра", "Диплом магистра",
+        "Диплом",  # раскрывается в подменю Бакалавр / Магистр
         "Доклад к защите + Презентация", "Другое",
     ]
     rows = [[InlineKeyboardButton(text=t, callback_data=f"type_{t}")] for t in types]
     rows += [_BTN_BACK, _BTN_CANCEL]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_diploma_type() -> InlineKeyboardMarkup:
+    """Подменю выбора уровня диплома."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Бакалавр", callback_data="type_Диплом бакалавра")],
+        [InlineKeyboardButton(text="Магистр",  callback_data="type_Диплом магистра")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="diploma_back")],
+    ])
 
 
 def kb_course() -> InlineKeyboardMarkup:
@@ -435,12 +444,6 @@ async def _check_draft(message: Message, state: FSMContext) -> None:
 
 async def _start_fresh(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(
-        "🎓 Привет! Я помогу оформить заявку на учебную работу.\n\n"
-        "Стоимость рассчитывается индивидуально — вы получите ответ "
-        "в течение 2 часов после заявки.\n\n"
-        "С нами — от заявки до защиты 🎓"
-    )
     await message.answer("Ваша работа — гуманитарная дисциплина?", reply_markup=kb_direction())
     await state.set_state(OrderStates.checking_direction)
 
@@ -494,6 +497,31 @@ async def cb_go_back(call: CallbackQuery, state: FSMContext) -> None:
     await show_current_step(call.message, state)
 
 
+# ─── Reply-кнопки постоянного меню ───────────────────────────────────────────
+# Зарегистрированы до текстовых обработчиков шагов, чтобы не перехватывались ими
+
+@router.message(F.text == "🎓 Заказать работу")
+async def reply_start_order(message: Message, state: FSMContext) -> None:
+    await _check_draft(message, state)
+
+
+@router.message(F.text == "⚡ Дополнить заказ")
+async def reply_urgent_order(message: Message, state: FSMContext) -> None:
+    tg_id = message.from_user.id
+    if not await has_active_order(tg_id):
+        await message.answer(
+            "У вас пока нет активных заказов.\n\n"
+            "Оформите заявку — и кнопка «⚡ Дополнить заказ» станет доступна."
+        )
+        return
+    await state.set_state(OrderStates.urgent_menu)
+    await message.answer(
+        "⚡ <b>Дополнить заказ</b>\n\nЧто нужно передать специалисту?",
+        reply_markup=kb_urgent(),
+        parse_mode="HTML",
+    )
+
+
 # ─── Шаг 0.5: направление ────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "dir_yes", StateFilter(OrderStates.checking_direction))
@@ -509,16 +537,38 @@ async def cb_dir_no(call: CallbackQuery, state: FSMContext) -> None:
     await call.message.answer(
         "😔 К сожалению, технические и точные науки — не моя специализация.\n"
         "Я работаю только с гуманитарными направлениями.\n\n"
-        "Если это ошибка — нажмите «✅ Да, гуманитарная» выше.",
+        "Если это ошибка — выберите ниже:",
+    )
+    await call.message.answer(
+        "Ваша работа — гуманитарная дисциплина?",
+        reply_markup=kb_direction(),
     )
 
 
 # ─── Шаг 1: тип работы ───────────────────────────────────────────────────────
 
+@router.callback_query(F.data == "type_Диплом", StateFilter(OrderStates.choosing_type))
+async def cb_work_type_diploma(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await call.message.edit_text(
+        "Шаг 1 из 13\n\nВыберите уровень диплома:",
+        reply_markup=kb_diploma_type(),
+    )
+
+
+@router.callback_query(F.data == "diploma_back", StateFilter(OrderStates.choosing_type))
+async def cb_diploma_back(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await call.message.edit_text(
+        "Шаг 1 из 13\n\nВыберите тип работы:",
+        reply_markup=kb_work_type(),
+    )
+
+
 @router.callback_query(F.data.startswith("type_"), StateFilter(OrderStates.choosing_type))
 async def cb_work_type(call: CallbackQuery, state: FSMContext) -> None:
-    work_type = call.data.removeprefix("type_")
     await ack(call)
+    work_type = call.data.removeprefix("type_")
     await state.update_data(work_type=work_type)
     await state.set_state(OrderStates.entering_name)
     await call.message.answer(
@@ -609,8 +659,8 @@ async def msg_specialization(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("course_"), StateFilter(OrderStates.choosing_course))
 async def cb_course(call: CallbackQuery, state: FSMContext) -> None:
-    course = call.data.removeprefix("course_")
     await ack(call)
+    course = call.data.removeprefix("course_")
     await state.update_data(course=course)
     await state.set_state(OrderStates.choosing_study_form)
     await call.message.answer("Шаг 7 из 13\n\n📖 Выберите форму обучения:", reply_markup=kb_study_form())
@@ -620,8 +670,8 @@ async def cb_course(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("form_"), StateFilter(OrderStates.choosing_study_form))
 async def cb_study_form(call: CallbackQuery, state: FSMContext) -> None:
-    form = call.data.removeprefix("form_")
     await ack(call)
+    form = call.data.removeprefix("form_")
     await state.update_data(study_form=form)
     await state.set_state(OrderStates.entering_topic)
     await call.message.answer(
@@ -679,8 +729,8 @@ async def cb_topic_keep(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("vol_"), StateFilter(OrderStates.entering_volume))
 async def cb_volume(call: CallbackQuery, state: FSMContext) -> None:
-    volume = call.data.removeprefix("vol_")
     await ack(call)
+    volume = call.data.removeprefix("vol_")
     if volume == "Введу сам":
         await state.set_state(OrderStates.entering_volume_custom)
         await call.message.answer(
@@ -712,8 +762,8 @@ async def msg_volume_custom(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith("uniq_"), StateFilter(OrderStates.entering_uniqueness))
 async def cb_uniqueness(call: CallbackQuery, state: FSMContext) -> None:
-    uniq = call.data.removeprefix("uniq_")
     await ack(call)
+    uniq = call.data.removeprefix("uniq_")
     await state.update_data(uniqueness=uniq)
     await state.set_state(OrderStates.choosing_deadline)
     await call.message.answer(
