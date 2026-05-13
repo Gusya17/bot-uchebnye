@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from order_states import SQLiteStorage
 from order_handlers import router as order_router
+import openrouter
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -216,14 +217,24 @@ async def cb_help(call: CallbackQuery):
     await call.message.answer(HELP_TEXT, parse_mode="HTML")
 
 
-# ── Эхо — только когда нет активного FSM-состояния ───────────────────────────
-# StateFilter(None) не даёт echo перехватить сообщения внутри сценария заявки
+# ── Свободный текст через OpenRouter ──────────────────────────────────────────
+# StateFilter(None) не даёт этому обработчику перехватить сообщения внутри сценария заявки.
+# Кнопки reply-меню исключены, чтобы они не попали сюда вместо своих обработчиков.
 
 _REPLY_BTNS = {"🎓 Заказать работу", "⚡ Дополнить заказ"}
 
 @dp.message(F.text & ~F.text.in_(_REPLY_BTNS), StateFilter(None))
-async def handle_echo(message: Message):
-    await message.answer(message.text)
+async def handle_free_text(message: Message):
+    thinking = await message.answer("Думаю...")
+    reply = await openrouter.ask(message.text)
+    try:
+        await thinking.delete()
+    except Exception:
+        pass
+    if reply:
+        await message.answer(reply, parse_mode="HTML")
+    else:
+        await message.answer("Не получилось ответить, попробуй через минуту")
 
 
 # ── Запуск ────────────────────────────────────────────────────────────────────
