@@ -1,4 +1,4 @@
-# Requirements — Бот «Инга»
+# Requirements — Бот «Анна»
 
 ## v1 Requirements
 

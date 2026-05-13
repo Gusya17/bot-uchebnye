@@ -1,4 +1,4 @@
-# Feature Landscape: Бот-диспетчер учебных работ «Инга»
+# Feature Landscape: Бот-диспетчер учебных работ «Анна»
 
 **Domain:** Telegram intake / order-collection bot (lead generation, single-owner service)
 **Researched:** 2026-05-03
@@ -13,7 +13,7 @@ The planned feature set (from PROJECT.md and системный промпт v4)
 
 | Planned Feature | Status | Gap / Notes |
 |-----------------|--------|-------------|
-| Greeting from "Инга" on any first message | Complete | None |
+| Greeting from "Анна" on any first message | Complete | None |
 | 9-item work-type selection menu | Complete | None |
 | Two modes: text form / voice form (Whisper) | Complete | None |
 | Sequential questions: name, phone (required), university, faculty, level, topic, deadline, methodical requirements (file), special wishes | Complete | None |
@@ -73,7 +73,7 @@ Features that set this bot apart from a basic form. Not universally expected, bu
 | Physics/math filter with graceful decline | Saves owner time, sets expectations early, feels professional | Low | Already in prompt v4 |
 | Dual delivery (Telegram + email) | Owner can check brief from phone or desktop, redundancy prevents missed orders | Low | Already decided |
 | File + voice forwarded with brief | Owner gets the full context, not just text — no need to ask client for re-send | Low | Already decided |
-| Persona ("Инга") — warm, professional tone | Feels like talking to a real coordinator; builds trust faster than a cold bot | Low | Already in prompt v4; must be preserved in all error messages too |
+| Persona ("Анна") — warm, professional tone | Feels like talking to a real coordinator; builds trust faster than a cold bot | Low | Already in prompt v4; must be preserved in all error messages too |
 | "Быстрая заявка" label | Signals to busy students that this path is faster — removes hesitation | Low | Marketing micro-copy; already designed |
 
 ---

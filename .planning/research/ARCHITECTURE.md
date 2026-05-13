@@ -1,4 +1,4 @@
-# Architecture Patterns: Telegram Order-Collection Bot (Инга)
+# Architecture Patterns: Telegram Order-Collection Bot (Анна)
 
 **Domain:** Telegram bot with FSM multi-step form, dual input modes, external services
 **Researched:** 2026-05-03

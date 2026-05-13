@@ -1,4 +1,4 @@
-# PITFALLS — Бот «Инга» на aiogram 3
+# PITFALLS — Бот «Анна» на aiogram 3
 
 ## 1. FFmpeg не установлен на сервере
 

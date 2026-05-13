@@ -1,6 +1,6 @@
 # Technology Stack
 
-**Project:** Бот-диспетчер учебных работ «Инга»
+**Project:** Бот-диспетчер учебных работ «Анна»
 **Researched:** 2026-05-03
 **Overall confidence:** HIGH (all versions verified against PyPI and official docs)
 
