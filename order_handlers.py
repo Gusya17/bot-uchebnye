@@ -20,6 +20,7 @@ from aiogram.fsm.context import FSMContext
 
 from order_states import OrderStates
 from orders_db import has_active_order, save_order
+from database import save_full_order
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -1040,9 +1041,16 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         log.exception("Не удалось сохранить заказ tg_id=%s", tg_id)
 
+    order_id = None
+    try:
+        order_id = await save_full_order(data)
+    except Exception:
+        log.exception("Не удалось сохранить полную заявку tg_id=%s", tg_id)
+
     await state.clear()
+    order_line = f"\nВаш номер заявки: #{order_id}" if order_id else ""
     await call.message.answer(
-        "✅ <b>Заявка принята!</b>\n\n"
+        f"✅ <b>Заявка принята!</b>{order_line}\n\n"
         "Обычно рассчитываем стоимость за 15–30 минут, максимум 2 часа (по МСК, 9:00–21:00).\n\n"
         "Если появятся уточнения — кнопка «⚡ Дополнить заказ» всегда под рукой.",
         parse_mode="HTML",
