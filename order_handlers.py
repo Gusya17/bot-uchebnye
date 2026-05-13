@@ -415,6 +415,12 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
             reply_markup=kb_confirm_order(),
             parse_mode="HTML",
         )
+    elif current == OrderStates.urgent_menu.state:
+        await message.answer(
+            "⚡ <b>Дополнить заказ</b>\n\nЧто нужно передать специалисту?",
+            reply_markup=kb_urgent(),
+            parse_mode="HTML",
+        )
 
 
 # ─── /order — точка входа ────────────────────────────────────────────────────
@@ -952,6 +958,16 @@ async def guard_file_state(message: Message) -> None:
     await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
 
 
+@router.message(NON_COMMAND, StateFilter(OrderStates.urgent_voice))
+async def guard_urgent_voice(message: Message) -> None:
+    await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
+
+
+@router.message(NON_COMMAND, StateFilter(OrderStates.urgent_file))
+async def guard_urgent_file(message: Message) -> None:
+    await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
+
+
 async def _go_to_phone(message: Message, state: FSMContext) -> None:
     await state.set_state(OrderStates.entering_phone)
     await message.answer(
@@ -1149,6 +1165,7 @@ async def msg_urgent_file(message: Message, state: FSMContext) -> None:
 _BUTTON_ONLY = StateFilter(
     OrderStates.checking_direction,
     OrderStates.choosing_type,
+    OrderStates.confirming_institution,
     OrderStates.choosing_course,
     OrderStates.choosing_study_form,
     OrderStates.confirming_topic,
