@@ -97,9 +97,11 @@ class OrderStates(StatesGroup):
     entering_name = State()            # 2:  ФИО
     entering_institution = State()      # 3:  учебное заведение
     confirming_institution = State()   # 3.5: подтверждение названия вуза
-    entering_faculty = State()         # 4:  факультет
-    entering_specialization = State()  # 5:  специализация
-    choosing_course = State()          # 6:  курс
+    entering_faculty = State()           # 4:  факультет
+    confirming_faculty = State()         # 4.5: подтверждение факультета
+    entering_specialization = State()    # 5:  специализация
+    confirming_specialization = State()  # 5.5: подтверждение специализации
+    choosing_course = State()            # 6:  курс
     choosing_study_form = State()      # 7:  форма обучения
     entering_topic = State()           # 8:  тема
     confirming_topic = State()         # 8.5: подтверждение темы
@@ -115,7 +117,6 @@ class OrderStates(StatesGroup):
     entering_phone = State()           # 13: телефон
     asking_email = State()             # 13.1: предложить добавить email?
     entering_email = State()           # 13.1: ввод email
-    showing_trust = State()            # экран гарантий
     confirming = State()               # финальное подтверждение
     # ⚡ Дополнить заказ
     urgent_menu = State()              # выбор типа дополнения

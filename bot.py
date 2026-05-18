@@ -3,8 +3,15 @@ import logging
 import os
 import random
 
+from dotenv import load_dotenv
+
+# load_dotenv() должен быть вызван ДО импортов проекта —
+# иначе order_handlers.py прочитает ADMIN_ID из env раньше чем .env загрузится
+load_dotenv()
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
@@ -14,13 +21,11 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
-from dotenv import load_dotenv
 
 from order_states import SQLiteStorage
 from order_handlers import router as order_router
 import openrouter
-
-load_dotenv()
+from database import upsert_user, set_consent, get_broadcast_recipients, set_inactive
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=os.getenv("BOT_TOKEN"))
@@ -72,14 +77,33 @@ def main_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def consent_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки согласия на рассылку — показываются один раз при /start."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Да, согласен ✅", callback_data="consent_yes"),
+        InlineKeyboardButton(text="Нет, спасибо",   callback_data="consent_no"),
+    ]])
+
+
 # ── /start ───────────────────────────────────────────────────────────────────
 
 @dp.message(CommandStart())
 async def handle_start(message: Message):
+    # Сохраняем пользователя при каждом /start; новым — создаём запись, старым — обновляем username
+    await upsert_user(message.from_user.id, message.from_user.username)
     name = message.from_user.first_name
     await message.answer(
         f"Привет, {name}! 👋 Я помогу оформить заявку на учебную работу.",
         reply_markup=reply_keyboard(),
+    )
+    # Информирование о данных и запрос согласия на рассылку — отдельным сообщением
+    await message.answer(
+        "ℹ️ <b>Данные и рассылка</b>\n\n"
+        "Этот бот собирает ваши данные (имя, телефон, тема и детали заказа) "
+        "для оказания услуг по учебным работам. Подробности — команда /privacy.\n\n"
+        "Хотите получать уведомления об акциях и новостях?",
+        parse_mode="HTML",
+        reply_markup=consent_keyboard(),
     )
 
 
@@ -98,7 +122,19 @@ HELP_TEXT = (
     "/clear — удалить все заметки\n\n"
     "🎲 <b>Генераторы:</b>\n"
     "/quote — случайная цитата про учёбу\n"
-    "/tip — полезный совет студенту"
+    "/tip — полезный совет студенту\n\n"
+    "🔒 <b>Конфиденциальность:</b>\n"
+    "/privacy — политика конфиденциальности\n"
+    "/unsubscribe — отписаться от рассылок"
+)
+
+PRIVACY_TEXT = (
+    "🔒 <b>Политика конфиденциальности</b>\n\n"
+    "Бот собирает: имя, телефон, тему и детали заказа.\n\n"
+    "Данные используются только для выполнения заказа и не передаются третьим лицам.\n\n"
+    "Срок хранения: 1 год с момента оформления заказа.\n\n"
+    "Вопросы и запросы на удаление данных — @ваш_контакт\n\n"
+    "Отказаться от рассылок: /unsubscribe"
 )
 
 @dp.message(Command("help"))
@@ -120,6 +156,64 @@ ABOUT_TEXT = (
 @dp.message(Command("about"))
 async def handle_about(message: Message):
     await message.answer(ABOUT_TEXT, parse_mode="HTML")
+
+
+# ── /privacy ──────────────────────────────────────────────────────────────────
+
+@dp.message(Command("privacy"))
+async def handle_privacy(message: Message):
+    await message.answer(PRIVACY_TEXT, parse_mode="HTML")
+
+
+# ── /unsubscribe ──────────────────────────────────────────────────────────────
+
+@dp.message(Command("unsubscribe"))
+async def handle_unsubscribe(message: Message):
+    await set_consent(message.from_user.id, 0)
+    await message.answer("✅ Вы отписались от рассылок.")
+
+
+# ── /myid (временная, для настройки прав администратора) ─────────────────────
+
+@dp.message(Command("myid"))
+async def handle_myid(message: Message):
+    await message.answer(f"Ваш Telegram ID: <code>{message.from_user.id}</code>", parse_mode="HTML")
+
+
+# ── /broadcast — рассылка по пользователям с consent=1 ───────────────────────
+
+_ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+
+@dp.message(Command("broadcast"))
+async def handle_broadcast(message: Message):
+    # Не администратор — молча игнорируем, чтобы не раскрывать существование команды
+    if message.from_user.id != _ADMIN_ID:
+        return
+
+    text = message.text.removeprefix("/broadcast").strip()
+    if not text:
+        await message.answer("Использование: /broadcast текст сообщения")
+        return
+
+    recipients = await get_broadcast_recipients()
+    if not recipients:
+        await message.answer("Нет подписчиков (consent=1).")
+        return
+
+    sent = 0
+    blocked = 0
+    for chat_id in recipients:
+        try:
+            await bot.send_message(chat_id, text)
+            sent += 1
+        except TelegramForbiddenError:
+            # Пользователь заблокировал бота — помечаем неактивным
+            await set_inactive(chat_id)
+            blocked += 1
+        except Exception:
+            pass  # Временные сетевые ошибки — пропускаем, не ломаем рассылку
+
+    await message.answer(f"Рассылка завершена.\nОтправлено: {sent}, заблокировали: {blocked}")
 
 
 # ── /quote ───────────────────────────────────────────────────────────────────
@@ -175,6 +269,25 @@ async def handle_clear(message: Message):
         await message.answer(f"🗑 Удалено {count} заметок.")
     else:
         await message.answer("Заметок не было — удалять нечего.")
+
+
+# ── Согласие на рассылку ─────────────────────────────────────────────────────
+
+@dp.callback_query(F.data == "consent_yes")
+async def cb_consent_yes(call: CallbackQuery):
+    await call.answer()
+    await set_consent(call.from_user.id, 1)
+    # Убираем кнопки, чтобы нельзя было нажать повторно
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.answer("✅ Отлично! Вы подписаны на уведомления об акциях и новостях.")
+
+
+@dp.callback_query(F.data == "consent_no")
+async def cb_consent_no(call: CallbackQuery):
+    await call.answer()
+    await set_consent(call.from_user.id, 0)
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.answer("👌 Понял, рассылки отключены. Передумаете — просто напишите /start.")
 
 
 # ── Inline-кнопки главного меню ───────────────────────────────────────────────
@@ -242,10 +355,12 @@ async def handle_free_text(message: Message):
 async def main():
     try:
         await bot.set_my_commands([
-            BotCommand(command="start",  description="Главное меню"),
-            BotCommand(command="order",  description="Оформить заявку"),
-            BotCommand(command="cancel", description="Прервать заявку"),
-            BotCommand(command="help",   description="Список команд"),
+            BotCommand(command="start",       description="Главное меню"),
+            BotCommand(command="order",       description="Оформить заявку"),
+            BotCommand(command="cancel",      description="Прервать заявку"),
+            BotCommand(command="help",        description="Список команд"),
+            BotCommand(command="privacy",     description="Политика конфиденциальности"),
+            BotCommand(command="unsubscribe", description="Отписаться от рассылок"),
         ])
     except Exception:
         pass  # Не критично — бот запустится без регистрации команд, aiogram сам переподключится

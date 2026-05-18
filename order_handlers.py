@@ -6,9 +6,10 @@
 """
 
 import logging
+import os
 import re
 
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.filters import Command, StateFilter
 from aiogram.types import (
     CallbackQuery,
@@ -21,6 +22,8 @@ from aiogram.fsm.context import FSMContext
 from order_states import OrderStates
 from orders_db import has_active_order, save_order
 from database import save_full_order
+
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -37,30 +40,31 @@ _BTN_CANCEL = [InlineKeyboardButton(text="❌ Отменить",   callback_data
 
 # Маппинг: текущее состояние → предыдущее (для ⬅️ Назад)
 PREV_STATE: dict = {
-    OrderStates.choosing_type.state:            OrderStates.checking_direction,
-    OrderStates.entering_name.state:            OrderStates.choosing_type,
-    OrderStates.entering_institution.state:     OrderStates.entering_name,
-    OrderStates.confirming_institution.state:   OrderStates.entering_institution,
-    OrderStates.entering_faculty.state:         OrderStates.confirming_institution,
-    OrderStates.entering_specialization.state:  OrderStates.entering_faculty,
-    OrderStates.choosing_course.state:          OrderStates.entering_specialization,
-    OrderStates.choosing_study_form.state:      OrderStates.choosing_course,
-    OrderStates.entering_topic.state:           OrderStates.choosing_study_form,
-    OrderStates.confirming_topic.state:         OrderStates.entering_topic,
-    OrderStates.entering_volume.state:          OrderStates.confirming_topic,
-    OrderStates.entering_volume_custom.state:   OrderStates.entering_volume,
-    OrderStates.entering_uniqueness.state:      OrderStates.entering_volume,
-    OrderStates.choosing_deadline.state:        OrderStates.entering_uniqueness,
-    OrderStates.entering_deadline_custom.state: OrderStates.choosing_deadline,
-    OrderStates.adding_materials.state:         OrderStates.choosing_deadline,
-    OrderStates.adding_materials_text.state:    OrderStates.adding_materials,
-    OrderStates.adding_materials_voice.state:   OrderStates.adding_materials,
-    OrderStates.adding_materials_file.state:    OrderStates.adding_materials,
-    OrderStates.entering_phone.state:           OrderStates.adding_materials,
-    OrderStates.asking_email.state:             OrderStates.entering_phone,
-    OrderStates.entering_email.state:           OrderStates.asking_email,
-    OrderStates.showing_trust.state:            OrderStates.asking_email,
-    OrderStates.confirming.state:               OrderStates.showing_trust,
+    OrderStates.choosing_type.state:             OrderStates.checking_direction,
+    OrderStates.entering_name.state:             OrderStates.choosing_type,
+    OrderStates.entering_institution.state:      OrderStates.entering_name,
+    OrderStates.confirming_institution.state:    OrderStates.entering_institution,
+    OrderStates.entering_faculty.state:          OrderStates.confirming_institution,
+    OrderStates.confirming_faculty.state:        OrderStates.entering_faculty,
+    OrderStates.entering_specialization.state:   OrderStates.confirming_faculty,
+    OrderStates.confirming_specialization.state: OrderStates.entering_specialization,
+    OrderStates.choosing_course.state:           OrderStates.confirming_specialization,
+    OrderStates.choosing_study_form.state:       OrderStates.choosing_course,
+    OrderStates.entering_topic.state:            OrderStates.choosing_study_form,
+    OrderStates.confirming_topic.state:          OrderStates.entering_topic,
+    OrderStates.entering_volume.state:           OrderStates.confirming_topic,
+    OrderStates.entering_volume_custom.state:    OrderStates.entering_volume,
+    OrderStates.entering_uniqueness.state:       OrderStates.entering_volume,
+    OrderStates.choosing_deadline.state:         OrderStates.entering_uniqueness,
+    OrderStates.entering_deadline_custom.state:  OrderStates.choosing_deadline,
+    OrderStates.adding_materials.state:          OrderStates.choosing_deadline,
+    OrderStates.adding_materials_text.state:     OrderStates.adding_materials,
+    OrderStates.adding_materials_voice.state:    OrderStates.adding_materials,
+    OrderStates.adding_materials_file.state:     OrderStates.adding_materials,
+    OrderStates.entering_phone.state:            OrderStates.adding_materials,
+    OrderStates.asking_email.state:              OrderStates.entering_phone,
+    OrderStates.entering_email.state:            OrderStates.asking_email,
+    OrderStates.confirming.state:                OrderStates.asking_email,
 }
 
 # Маппинг состояния → номер шага
@@ -70,8 +74,10 @@ STATE_STEP: dict[str, str] = {
     OrderStates.entering_name.state:            "2 из 13",
     OrderStates.entering_institution.state:     "3 из 13",
     OrderStates.confirming_institution.state:   "3 из 13",
-    OrderStates.entering_faculty.state:         "4 из 13",
-    OrderStates.entering_specialization.state:  "5 из 13",
+    OrderStates.entering_faculty.state:            "4 из 13",
+    OrderStates.confirming_faculty.state:          "4 из 13",
+    OrderStates.entering_specialization.state:     "5 из 13",
+    OrderStates.confirming_specialization.state:   "5 из 13",
     OrderStates.choosing_course.state:          "6 из 13",
     OrderStates.choosing_study_form.state:      "7 из 13",
     OrderStates.entering_topic.state:           "8 из 13",
@@ -88,19 +94,9 @@ STATE_STEP: dict[str, str] = {
     OrderStates.entering_phone.state:           "13 из 13",
     OrderStates.asking_email.state:             "13 из 13",
     OrderStates.entering_email.state:           "13 из 13",
-    OrderStates.showing_trust.state:            "13 из 13",
     OrderStates.confirming.state:               "13 из 13",
 }
 
-TRUST_TEXT = (
-    "🛡️ <b>Вы в надёжных руках!</b>\n\n"
-    "✅ Стоимость — индивидуально под вашу работу, ответ в течение 2 часов\n"
-    "✅ Корректировка работы — до 2 раз бесплатно\n"
-    "✅ Всё общение — прямо здесь, в боте\n"
-    "✅ Работа будет принята — или доработаем\n"
-    "⚡ Если что-то изменится — кнопка «Дополнить заказ» всегда под рукой\n\n"
-    "Мы рядом от первой заявки до защиты 🎓"
-)
 
 
 # ─── Вспомогательная функция подтверждения callback ──────────────────────────
@@ -176,6 +172,22 @@ def kb_confirm_institution() -> InlineKeyboardMarkup:
     ])
 
 
+def kb_confirm_faculty() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, верно",      callback_data="faculty_ok")],
+        [InlineKeyboardButton(text="✏️ Ввести заново", callback_data="faculty_retry")],
+        _BTN_BACK, _BTN_CANCEL,
+    ])
+
+
+def kb_confirm_specialization() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, верно",      callback_data="spec_ok")],
+        [InlineKeyboardButton(text="✏️ Ввести заново", callback_data="spec_retry")],
+        _BTN_BACK, _BTN_CANCEL,
+    ])
+
+
 def kb_confirm_topic() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да, верно",       callback_data="topic_ok")],
@@ -230,13 +242,6 @@ def kb_email() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📧 Добавить email", callback_data="email_add")],
         [InlineKeyboardButton(text="⏭️ Пропустить",    callback_data="email_skip")],
-        _BTN_BACK, _BTN_CANCEL,
-    ])
-
-
-def kb_trust() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📨 Отправить заявку", callback_data="trust_send")],
         _BTN_BACK, _BTN_CANCEL,
     ])
 
@@ -348,11 +353,23 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
             "(без сокращений — как в документах учебного заведения)",
             reply_markup=kb_back_cancel(),
         )
+    elif current == OrderStates.confirming_faculty.state:
+        faculty = data.get("faculty", "")
+        await message.answer(
+            f"Факультет:\n\n«{faculty}»\n\nВсё верно?",
+            reply_markup=kb_confirm_faculty(),
+        )
     elif current == OrderStates.entering_specialization.state:
         await message.answer(
             "Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки полностью:\n"
             "(например: «Государственное и муниципальное управление», не «ГМУ»)",
             reply_markup=kb_back_cancel(),
+        )
+    elif current == OrderStates.confirming_specialization.state:
+        spec = data.get("specialization", "")
+        await message.answer(
+            f"Специализация:\n\n«{spec}»\n\nВсё верно?",
+            reply_markup=kb_confirm_specialization(),
         )
     elif current == OrderStates.choosing_course.state:
         await message.answer("Шаг 6 из 13\n\n📅 Выберите курс:", reply_markup=kb_course())
@@ -405,13 +422,10 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
         await state.set_state(OrderStates.asking_email)
         await message.answer("📧 Добавить email для связи?\n(необязательно)", reply_markup=kb_email())
 
-    elif current == OrderStates.showing_trust.state:
-        await message.answer(TRUST_TEXT, reply_markup=kb_trust(), parse_mode="HTML")
-
     elif current == OrderStates.confirming.state:
         brief = format_brief(data)
         await message.answer(
-            f"Проверьте данные заявки:\n\n{brief}\n\nПроверьте данные и нажмите «Отправить заявку».",
+            f"Проверьте данные заявки:\n\n{brief}",
             reply_markup=kb_confirm_order(),
             parse_mode="HTML",
         )
@@ -671,11 +685,32 @@ async def cb_institution_retry(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(NON_COMMAND, StateFilter(OrderStates.entering_faculty))
 async def msg_faculty(message: Message, state: FSMContext) -> None:
-    await state.update_data(faculty=message.text.strip())
-    await state.set_state(OrderStates.entering_specialization)
+    faculty = message.text.strip()
+    await state.update_data(faculty=faculty)
+    await state.set_state(OrderStates.confirming_faculty)
     await message.answer(
+        f"Факультет:\n\n«{faculty}»\n\nВсё верно?",
+        reply_markup=kb_confirm_faculty(),
+    )
+
+
+@router.callback_query(F.data == "faculty_ok", StateFilter(OrderStates.confirming_faculty))
+async def cb_faculty_ok(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.entering_specialization)
+    await call.message.answer(
         "Шаг 5 из 13\n\n🎓 Введите специализацию / направление подготовки полностью:\n"
         "(например: «Государственное и муниципальное управление», не «ГМУ»)",
+        reply_markup=kb_back_cancel(),
+    )
+
+
+@router.callback_query(F.data == "faculty_retry", StateFilter(OrderStates.confirming_faculty))
+async def cb_faculty_retry(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.entering_faculty)
+    await call.message.answer(
+        "🏫 Введите название факультета заново:",
         reply_markup=kb_back_cancel(),
     )
 
@@ -684,9 +719,30 @@ async def msg_faculty(message: Message, state: FSMContext) -> None:
 
 @router.message(NON_COMMAND, StateFilter(OrderStates.entering_specialization))
 async def msg_specialization(message: Message, state: FSMContext) -> None:
-    await state.update_data(specialization=message.text.strip())
+    spec = message.text.strip()
+    await state.update_data(specialization=spec)
+    await state.set_state(OrderStates.confirming_specialization)
+    await message.answer(
+        f"Специализация:\n\n«{spec}»\n\nВсё верно?",
+        reply_markup=kb_confirm_specialization(),
+    )
+
+
+@router.callback_query(F.data == "spec_ok", StateFilter(OrderStates.confirming_specialization))
+async def cb_spec_ok(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
     await state.set_state(OrderStates.choosing_course)
-    await message.answer("Шаг 6 из 13\n\n📅 Выберите курс:", reply_markup=kb_course())
+    await call.message.answer("Шаг 6 из 13\n\n📅 Выберите курс:", reply_markup=kb_course())
+
+
+@router.callback_query(F.data == "spec_retry", StateFilter(OrderStates.confirming_specialization))
+async def cb_spec_retry(call: CallbackQuery, state: FSMContext) -> None:
+    await ack(call)
+    await state.set_state(OrderStates.entering_specialization)
+    await call.message.answer(
+        "🎓 Введите специализацию заново:",
+        reply_markup=kb_back_cancel(),
+    )
 
 
 # ─── Шаг 6: курс ─────────────────────────────────────────────────────────────
@@ -1005,32 +1061,24 @@ async def cb_email_add(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_email_skip(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
     await state.update_data(email="—")
-    await _show_trust(call.message, state)
+    await _go_to_confirming(call.message, state, call.from_user)
 
 
 @router.message(NON_COMMAND, StateFilter(OrderStates.entering_email))
 async def msg_email(message: Message, state: FSMContext) -> None:
     await state.update_data(email=message.text.strip())
-    await _show_trust(message, state)
+    await _go_to_confirming(message, state, message.from_user)
 
 
-# ─── Экран гарантий ──────────────────────────────────────────────────────────
-
-async def _show_trust(message: Message, state: FSMContext) -> None:
-    await state.set_state(OrderStates.showing_trust)
-    await message.answer(TRUST_TEXT, reply_markup=kb_trust(), parse_mode="HTML")
-
-
-@router.callback_query(F.data == "trust_send", StateFilter(OrderStates.showing_trust))
-async def cb_trust_send(call: CallbackQuery, state: FSMContext) -> None:
-    await ack(call)
-    username = f"@{call.from_user.username}" if call.from_user.username else "нет"
-    await state.update_data(tg_id=call.from_user.id, tg_username=username)
+async def _go_to_confirming(message: Message, state: FSMContext, from_user) -> None:
+    """Сохраняет tg_id/username и переходит к финальному экрану с брифом."""
+    username = f"@{from_user.username}" if from_user.username else "нет"
+    await state.update_data(tg_id=from_user.id, tg_username=username)
     data = await state.get_data()
     brief = format_brief(data)
     await state.set_state(OrderStates.confirming)
-    await call.message.answer(
-        f"Проверьте данные заявки:\n\n{brief}\n\nПроверьте данные и нажмите «Отправить заявку».",
+    await message.answer(
+        f"Проверьте данные заявки:\n\n{brief}",
         reply_markup=kb_confirm_order(),
         parse_mode="HTML",
     )
@@ -1039,7 +1087,7 @@ async def cb_trust_send(call: CallbackQuery, state: FSMContext) -> None:
 # ─── Финальное подтверждение ──────────────────────────────────────────────────
 
 @router.callback_query(F.data == "confirm_yes", StateFilter(OrderStates.confirming))
-async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
+async def cb_confirm_yes(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await ack(call)
     data = await state.get_data()
 
@@ -1062,6 +1110,22 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext) -> None:
         order_id = await save_full_order(data)
     except Exception:
         log.exception("Не удалось сохранить полную заявку tg_id=%s", tg_id)
+
+    # Уведомляем администратора о новой заявке
+    if ADMIN_ID:
+        try:
+            order_num = f"#{order_id}" if order_id else "(не сохранена)"
+            name = data.get("name", "—")
+            await bot.send_message(
+                ADMIN_ID,
+                f"🆕 <b>Новая заявка {order_num}</b>\n"
+                f"Тип: {data.get('work_type', '—')}\n"
+                f"Срок: {data.get('deadline', '—')}\n"
+                f"От: {tg_username} / {name}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            log.exception("Не удалось отправить уведомление администратору")
 
     await state.clear()
     order_line = f"\nВаш номер заявки: #{order_id}" if order_id else ""
@@ -1166,6 +1230,8 @@ _BUTTON_ONLY = StateFilter(
     OrderStates.checking_direction,
     OrderStates.choosing_type,
     OrderStates.confirming_institution,
+    OrderStates.confirming_faculty,
+    OrderStates.confirming_specialization,
     OrderStates.choosing_course,
     OrderStates.choosing_study_form,
     OrderStates.confirming_topic,
@@ -1174,7 +1240,6 @@ _BUTTON_ONLY = StateFilter(
     OrderStates.choosing_deadline,
     OrderStates.adding_materials,
     OrderStates.asking_email,
-    OrderStates.showing_trust,
     OrderStates.confirming,
     OrderStates.urgent_menu,
 )
