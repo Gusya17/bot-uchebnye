@@ -38,6 +38,13 @@ async def _ensure(db: aiosqlite.Connection) -> None:
             created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # payment_status добавляется отдельно для совместимости с уже существующими базами
+    try:
+        await db.execute(
+            "ALTER TABLE orders ADD COLUMN payment_status TEXT DEFAULT 'pending'"
+        )
+    except Exception:
+        pass  # Столбец уже существует — это норма
     await db.commit()
 
 
@@ -78,6 +85,27 @@ async def save_full_order(data: dict) -> int:
         )
         await db.commit()
         return cursor.lastrowid
+
+
+async def get_order_by_id(order_id: int) -> dict | None:
+    """Возвращает заявку по ID в виде словаря или None если не найдена."""
+    async with aiosqlite.connect(_DB) as db:
+        await _ensure(db)
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM orders WHERE id = ?", (order_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def update_order_payment_status(order_id: int, status: str) -> None:
+    """Обновляет статус оплаты заявки. status: 'pending' | 'paid' | 'cancelled'."""
+    async with aiosqlite.connect(_DB) as db:
+        await _ensure(db)
+        await db.execute(
+            "UPDATE orders SET payment_status = ? WHERE id = ?",
+            (status, order_id),
+        )
+        await db.commit()
 
 
 async def get_broadcast_recipients() -> list[int]:

@@ -118,6 +118,7 @@ class OrderStates(StatesGroup):
     asking_email = State()             # 13.1: предложить добавить email?
     entering_email = State()           # 13.1: ввод email
     confirming = State()               # финальное подтверждение
+    awaiting_payment = State()         # ожидание оплаты (тестовый режим, Вариант А)
     # ⚡ Дополнить заказ
     urgent_menu = State()              # выбор типа дополнения
     urgent_text = State()              # ожидание текста

@@ -25,7 +25,11 @@ from aiogram.types import (
 from order_states import SQLiteStorage
 from order_handlers import router as order_router
 import openrouter
-from database import upsert_user, set_consent, get_broadcast_recipients, set_inactive
+from database import (
+    upsert_user, set_consent, get_broadcast_recipients, set_inactive,
+    get_order_by_id, update_order_payment_status,
+)
+from payment import kb_invoice, format_price
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=os.getenv("BOT_TOKEN"))
@@ -328,6 +332,94 @@ async def cb_about(call: CallbackQuery):
 async def cb_help(call: CallbackQuery):
     await call.answer()
     await call.message.answer(HELP_TEXT, parse_mode="HTML")
+
+
+# ── /invoice — выставить счёт вручную (только администратор, Вариант Б) ──────
+
+@dp.message(Command("invoice"))
+async def handle_invoice(message: Message):
+    # Молча игнорируем — чтобы не раскрывать существование команды посторонним
+    if message.from_user.id != _ADMIN_ID:
+        return
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "Использование: /invoice [номер_заявки] [сумма]\n"
+            "Пример: /invoice 42 3500"
+        )
+        return
+
+    try:
+        order_id = int(parts[1])
+        amount = int(parts[2])
+    except ValueError:
+        await message.answer("Ошибка: номер заявки и сумма должны быть целыми числами.")
+        return
+
+    order = await get_order_by_id(order_id)
+    if not order:
+        await message.answer(f"⚠️ Заявка #{order_id} не найдена в базе.")
+        return
+
+    tg_id = order["tg_id"]
+    try:
+        await bot.send_message(
+            tg_id,
+            f"💳 По вашей заявке <b>#{order_id}</b> выставлен счёт: "
+            f"<b>{format_price(amount)} руб.</b>\n\n"
+            f"Нажмите «Оплатить» для подтверждения или «Отменить заявку» для отмены.",
+            reply_markup=kb_invoice(order_id, amount),
+            parse_mode="HTML",
+        )
+        await message.answer(
+            f"✅ Счёт отправлен.\n"
+            f"Заявка #{order_id} · {format_price(amount)} руб. · tg_id={tg_id}"
+        )
+    except Exception as exc:
+        await message.answer(f"Ошибка отправки клиенту: {exc}")
+
+
+@dp.callback_query(F.data.startswith("inv_pay_"))
+async def cb_inv_pay(call: CallbackQuery):
+    """Вариант Б: клиент нажал «Оплатить» на выставленном счёте."""
+    await call.answer()
+    try:
+        # callback_data: "inv_pay_{order_id}_{amount}"
+        remainder = call.data.removeprefix("inv_pay_")
+        order_id_str, amount_str = remainder.split("_", 1)
+        order_id = int(order_id_str)
+        amount = int(amount_str)
+    except (ValueError, AttributeError):
+        return
+
+    await update_order_payment_status(order_id, "paid")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(
+        f"✅ <b>Оплата принята!</b> Заказ #{order_id} подтверждён.\n\n"
+        f"Сумма: {format_price(amount)} руб.",
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data.startswith("inv_cancel_"))
+async def cb_inv_cancel(call: CallbackQuery):
+    """Вариант Б: клиент нажал «Отменить заявку» на выставленном счёте."""
+    await call.answer()
+    try:
+        order_id = int(call.data.removeprefix("inv_cancel_"))
+    except ValueError:
+        return
+
+    await update_order_payment_status(order_id, "cancelled")
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(f"❌ Заявка #{order_id} отменена.")
 
 
 # ── Свободный текст через OpenRouter ──────────────────────────────────────────
