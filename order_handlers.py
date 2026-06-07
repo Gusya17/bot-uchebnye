@@ -22,7 +22,6 @@ from aiogram.fsm.context import FSMContext
 from order_states import OrderStates
 from orders_db import has_active_order, save_order
 from database import save_full_order
-from payment import get_price, format_price, PAYMENT_MODE, kb_payment
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
@@ -96,7 +95,6 @@ STATE_STEP: dict[str, str] = {
     OrderStates.asking_email.state:             "13 из 13",
     OrderStates.entering_email.state:           "13 из 13",
     OrderStates.confirming.state:               "13 из 13",
-    OrderStates.awaiting_payment.state:         "оплата",
 }
 
 
@@ -431,17 +429,6 @@ async def show_current_step(message: Message, state: FSMContext) -> None:
             reply_markup=kb_confirm_order(),
             parse_mode="HTML",
         )
-    elif current == OrderStates.awaiting_payment.state:
-        work_type = data.get("work_type", "")
-        price = get_price(work_type)
-        if price is not None:
-            await message.answer(
-                f"💳 <b>Стоимость заказа: {format_price(price)} руб.</b>\n\n"
-                f"Нажмите кнопку для подтверждения оплаты (тестовый режим)",
-                reply_markup=kb_payment(),
-                parse_mode="HTML",
-            )
-
     elif current == OrderStates.urgent_menu.state:
         await message.answer(
             "⚡ <b>Дополнить заказ</b>\n\nЧто нужно передать специалисту?",
@@ -1152,20 +1139,6 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext, bot: Bot) -> No
     await ack(call)
     data = await state.get_data()
 
-    # Вариант А: тестовая оплата — показываем экран с суммой вместо сохранения
-    if PAYMENT_MODE == "test":
-        price = get_price(data.get("work_type", ""))
-        if price is not None:
-            await state.set_state(OrderStates.awaiting_payment)
-            await call.message.answer(
-                f"💳 <b>Стоимость заказа: {format_price(price)} руб.</b>\n\n"
-                f"Нажмите кнопку для подтверждения оплаты (тестовый режим)",
-                reply_markup=kb_payment(),
-                parse_mode="HTML",
-            )
-            return
-
-    # Прямое сохранение — если PAYMENT_MODE != "test" или тип не в прайсе
     order_id = await _do_save_order(state, data, bot)
     order_line = f"\nВаш номер заявки: #{order_id}" if order_id else ""
     await call.message.answer(
@@ -1173,37 +1146,6 @@ async def cb_confirm_yes(call: CallbackQuery, state: FSMContext, bot: Bot) -> No
         "Обычно рассчитываем стоимость за 15–30 минут, максимум 2 часа (по МСК, 9:00–21:00).\n\n"
         "Если появятся уточнения — кнопка «⚡ Дополнить заказ» всегда под рукой.",
         parse_mode="HTML",
-        reply_markup=kb_main_menu(),
-    )
-
-
-@router.callback_query(F.data == "pay_confirm", StateFilter(OrderStates.awaiting_payment))
-async def cb_pay_confirm(call: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    """Вариант А: пользователь подтвердил оплату — сохраняем заявку."""
-    await ack(call)
-    data = await state.get_data()
-    work_type = data.get("work_type", "")
-    price = get_price(work_type)
-    price_str = f" ({format_price(price)} руб.)" if price else ""
-    await call.message.answer(f"✅ Оплата{price_str} принята! Оформляю заявку...")
-    order_id = await _do_save_order(state, data, bot)
-    order_num = f"#{order_id}" if order_id else ""
-    await call.message.answer(
-        f"✅ <b>Оплата получена! Заявка {order_num} принята в работу.</b>\n\n"
-        "Свяжемся с вами в течение 2 часов для уточнения деталей.\n\n"
-        "Если появятся уточнения — кнопка «⚡ Дополнить заказ» всегда под рукой.",
-        parse_mode="HTML",
-        reply_markup=kb_main_menu(),
-    )
-
-
-@router.callback_query(F.data == "pay_cancel", StateFilter(OrderStates.awaiting_payment))
-async def cb_pay_cancel(call: CallbackQuery, state: FSMContext) -> None:
-    """Вариант А: пользователь отменил оплату — сбрасываем всё."""
-    await ack(call)
-    await state.clear()
-    await call.message.answer(
-        "❌ Оплата отменена. Заявка не создана.\n\nНажмите кнопку, чтобы начать заново.",
         reply_markup=kb_main_menu(),
     )
 
@@ -1311,7 +1253,6 @@ _BUTTON_ONLY = StateFilter(
     OrderStates.adding_materials,
     OrderStates.asking_email,
     OrderStates.confirming,
-    OrderStates.awaiting_payment,
     OrderStates.urgent_menu,
 )
 
