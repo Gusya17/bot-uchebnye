@@ -1009,8 +1009,20 @@ async def guard_voice_state(message: Message) -> None:
     await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
 
 
+# Фото/файл вместо голосового — дать обратную связь
+@router.message(F.photo | F.document, StateFilter(OrderStates.adding_materials_voice))
+async def guard_voice_wrong_media(message: Message) -> None:
+    await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
+
+
 @router.message(NON_COMMAND, StateFilter(OrderStates.adding_materials_file))
 async def guard_file_state(message: Message) -> None:
+    await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
+
+
+# Голосовое вместо файла — дать обратную связь
+@router.message(F.voice, StateFilter(OrderStates.adding_materials_file))
+async def guard_file_wrong_media(message: Message) -> None:
     await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
 
 
@@ -1019,9 +1031,27 @@ async def guard_urgent_voice(message: Message) -> None:
     await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
 
 
+# Фото/файл вместо голосового в urgent
+@router.message(F.photo | F.document, StateFilter(OrderStates.urgent_voice))
+async def guard_urgent_voice_wrong_media(message: Message) -> None:
+    await message.answer("Пожалуйста, запишите голосовое сообщение 🎤", reply_markup=kb_only_cancel())
+
+
 @router.message(NON_COMMAND, StateFilter(OrderStates.urgent_file))
 async def guard_urgent_file(message: Message) -> None:
     await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
+
+
+# Голосовое вместо файла в urgent
+@router.message(F.voice, StateFilter(OrderStates.urgent_file))
+async def guard_urgent_file_wrong_media(message: Message) -> None:
+    await message.answer("Пожалуйста, прикрепите файл или фото 📎", reply_markup=kb_only_cancel())
+
+
+# Медиа вместо текста в urgent_text
+@router.message(F.photo | F.document | F.voice, StateFilter(OrderStates.urgent_text))
+async def guard_urgent_text_media(message: Message) -> None:
+    await message.answer("Пожалуйста, напишите уточнение текстом ✍️", reply_markup=kb_only_cancel())
 
 
 async def _go_to_phone(message: Message, state: FSMContext) -> None:
@@ -1164,6 +1194,13 @@ async def cb_confirm_no(call: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "urgent_order")
 async def cb_urgent_order(call: CallbackQuery, state: FSMContext) -> None:
     await ack(call)
+    # Нельзя открывать «Дополнить заказ» пока пользователь заполняет новую заявку
+    current = await state.get_state()
+    if current is not None and not current.startswith("OrderStates:urgent"):
+        await call.message.answer(
+            "Сначала завершите или отмените текущую заявку (/cancel)."
+        )
+        return
     tg_id = call.from_user.id
     try:
         active = await has_active_order(tg_id)
