@@ -282,6 +282,7 @@ async def cb_consent_yes(call: CallbackQuery):
     # Убираем кнопки, чтобы нельзя было нажать повторно
     await call.message.edit_reply_markup(reply_markup=None)
     await call.message.answer("✅ Отлично! Вы подписаны на уведомления об акциях и новостях.")
+    await call.message.answer("Чем могу помочь?", reply_markup=main_keyboard())
 
 
 @dp.callback_query(F.data == "consent_no")
@@ -290,6 +291,7 @@ async def cb_consent_no(call: CallbackQuery):
     await set_consent(call.from_user.id, 0)
     await call.message.edit_reply_markup(reply_markup=None)
     await call.message.answer("👌 Понял, рассылки отключены. Передумаете — просто напишите /start.")
+    await call.message.answer("Чем могу помочь?", reply_markup=main_keyboard())
 
 
 # ── Inline-кнопки главного меню ───────────────────────────────────────────────
